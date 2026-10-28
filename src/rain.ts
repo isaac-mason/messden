@@ -41,7 +41,22 @@ const SLIDE = {
 // How fast wiped trails mist over again, per second.
 const REFOG = 0.12;
 
-type Drop = { x: number; y: number; r: number; vy: number; moving: boolean; age: number; travelled: number; wander: number };
+type Drop = {
+    x: number;
+    y: number;
+    r: number;
+    vy: number;
+    moving: boolean;
+    age: number;
+    travelled: number;
+    wander: number;
+    gone: boolean;
+};
+
+// Runs every frame over a few thousand drops, so nothing in it allocates once warmed up: drops that go are kept for
+// reuse, and the merge grid is a flat linked list per cell in typed arrays, refilled in place.
+const spare: Drop[] = [];
+const shedding: Drop[] = [];
 
 export type Rain = {
     width: number;
@@ -51,6 +66,8 @@ export type Rain = {
     wiped: { canvas: HTMLCanvasElement; context: CanvasRenderingContext2D; texture: THREE.CanvasTexture };
     sprite: HTMLCanvasElement;
     owed: number;
+    // Per cell, the first drop in it (an index into drops, or -1); per drop, the next in the same cell.
+    grid: { columns: number; rows: number; first: Int32Array; next: Int32Array };
 };
 
 export function initRain(width: number, height: number): Rain {
@@ -71,6 +88,12 @@ export function initRain(width: number, height: number): Rain {
         wiped: surface(MAP.wipedPerMetre),
         sprite: dropSprite(64),
         owed: 0,
+        grid: {
+            columns: Math.ceil(width / CELL) + 1,
+            rows: Math.ceil(height / CELL) + 1,
+            first: new Int32Array((Math.ceil(width / CELL) + 1) * (Math.ceil(height / CELL) + 1)),
+            next: new Int32Array(RAIN.max * 2),
+        },
     };
     // Start mid-storm rather than on dry glass.
     for (let i = 0; i < 240; i++) updateRain(rain, 0.05);
@@ -81,7 +104,9 @@ export function updateRain(rain: Rain, dt: number): void {
     land(rain, dt);
     slide(rain, dt);
     merge(rain);
-    if (rain.drops.length > RAIN.max) rain.drops.splice(0, rain.drops.length - RAIN.max);
+    // Past the cap, the oldest go.
+    for (let i = 0; i < rain.drops.length - RAIN.max; i++) rain.drops[i].gone = true;
+    if (rain.drops.length > RAIN.max) compact(rain);
     for (const drop of rain.drops) {
         drop.age += dt;
         if (!drop.moving) drop.r -= RAIN.evaporate * dt;
@@ -110,11 +135,33 @@ function land(rain: Rain, dt: number) {
 }
 
 function newDrop(x: number, y: number, r: number): Drop {
-    return { x, y, r, vy: 0, moving: false, age: 0, travelled: 0, wander: Math.random() * 100 };
+    const drop = spare.pop() ?? { x: 0, y: 0, r: 0, vy: 0, moving: false, age: 0, travelled: 0, wander: 0, gone: false };
+    drop.x = x;
+    drop.y = y;
+    drop.r = r;
+    drop.vy = 0;
+    drop.moving = false;
+    drop.age = 0;
+    drop.travelled = 0;
+    drop.wander = Math.random() * 100;
+    drop.gone = false;
+    return drop;
+}
+
+// Keeps the drops still here, in order, in place; the rest go to the spares.
+function compact(rain: Rain) {
+    const drops = rain.drops;
+    let kept = 0;
+    for (let i = 0; i < drops.length; i++) {
+        const drop = drops[i];
+        if (drop.gone) spare.push(drop);
+        else drops[kept++] = drop;
+    }
+    drops.length = kept;
 }
 
 function slide(rain: Rain, dt: number) {
-    const shed: Drop[] = [];
+    shedding.length = 0;
     for (const drop of rain.drops) {
         if (!drop.moving) {
             if (drop.r > SLIDE.heavy && Math.random() < SLIDE.start * (drop.r / SLIDE.heavy) * dt) drop.moving = true;
@@ -130,47 +177,62 @@ function slide(rain: Rain, dt: number) {
         while (drop.travelled > SLIDE.trailEvery) {
             drop.travelled -= SLIDE.trailEvery;
             const size = drop.r * THREE.MathUtils.randFloat(SLIDE.trailSize[0], SLIDE.trailSize[1]);
-            shed.push(newDrop(drop.x + (Math.random() - 0.5) * drop.r * 0.5, drop.y + drop.r * 1.2, size));
+            shedding.push(newDrop(drop.x + (Math.random() - 0.5) * drop.r * 0.5, drop.y + drop.r * 1.2, size));
             // What it leaves, it loses: water's only ever moved, never made.
             drop.r = Math.sqrt(Math.max(drop.r * drop.r - size * size, 0));
         }
         if (drop.r < SLIDE.heavy * 0.6) drop.moving = false;
     }
-    rain.drops = rain.drops.filter((drop) => drop.y > -drop.r * 3 && drop.r > 0.0008).concat(shed);
+    for (const drop of rain.drops) if (drop.y < -drop.r * 3 || drop.r < 0.0008) drop.gone = true;
+    compact(rain);
+    for (const drop of shedding) rain.drops.push(drop);
 }
 
 // Touching drops become one, keeping their area; a moving drop swallows what it runs into.
+const CELL = RAIN.big.size[1] * 2.5;
+
 function merge(rain: Rain) {
-    const cell = RAIN.big.size[1] * 2.5;
-    const grid = new Map<number, Drop[]>();
-    const key = (x: number, y: number) => Math.floor(x / cell) * 73856093 + Math.floor(y / cell) * 19349663;
-    for (const drop of rain.drops) {
-        const k = key(drop.x, drop.y);
-        const list = grid.get(k);
-        if (list) list.push(drop);
-        else grid.set(k, [drop]);
+    const { drops } = rain;
+    const { columns, rows, first } = rain.grid;
+    if (rain.grid.next.length < drops.length) rain.grid.next = new Int32Array(drops.length * 2);
+    const next = rain.grid.next;
+    first.fill(-1);
+    for (let i = 0; i < drops.length; i++) {
+        const column = Math.min(Math.max(Math.floor(drops[i].x / CELL), 0), columns - 1);
+        const row = Math.min(Math.max(Math.floor(drops[i].y / CELL), 0), rows - 1);
+        const cell = row * columns + column;
+        next[i] = first[cell];
+        first[cell] = i;
     }
-    const gone = new Set<Drop>();
-    for (const drop of rain.drops) {
+    let merged = false;
+    for (const drop of drops) {
         // Still drops only meet what lands on them or runs into them: start from those.
-        if (gone.has(drop) || (!drop.moving && drop.age > 0.05)) continue;
+        if (drop.gone || (!drop.moving && drop.age > 0.05)) continue;
+        const column = Math.floor(drop.x / CELL);
+        const row = Math.floor(drop.y / CELL);
         // Once it's been swallowed itself, it has nothing left to give.
-        neighbours: for (let dx = -1; dx <= 1; dx++) {
-            for (let dy = -1; dy <= 1; dy++) {
-                for (const other of grid.get(key(drop.x + dx * cell, drop.y + dy * cell)) ?? []) {
-                    if (gone.has(drop)) break neighbours;
-                    if (other === drop || gone.has(other)) continue;
+        neighbours: for (let r = row - 1; r <= row + 1; r++) {
+            if (r < 0 || r >= rows) continue;
+            for (let c = column - 1; c <= column + 1; c++) {
+                if (c < 0 || c >= columns) continue;
+                for (let j = first[r * columns + c]; j !== -1; j = next[j]) {
+                    if (drop.gone) break neighbours;
+                    const other = drops[j];
+                    if (other === drop || other.gone) continue;
                     const reach = (drop.r + other.r) * 0.8;
                     if ((drop.x - other.x) ** 2 + (drop.y - other.y) ** 2 > reach * reach) continue;
-                    const [big, small] = drop.r >= other.r || drop.moving ? [drop, other] : [other, drop];
+                    const keeps = drop.r >= other.r || drop.moving;
+                    const big = keeps ? drop : other;
+                    const small = keeps ? other : drop;
                     big.r = Math.sqrt(big.r * big.r + small.r * small.r);
                     big.moving = big.moving || small.moving;
-                    gone.add(small);
+                    small.gone = true;
+                    merged = true;
                 }
             }
         }
     }
-    if (gone.size) rain.drops = rain.drops.filter((drop) => !gone.has(drop));
+    if (merged) compact(rain);
 }
 
 function draw(rain: Rain, dt: number) {

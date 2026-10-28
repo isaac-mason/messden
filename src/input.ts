@@ -64,7 +64,8 @@ export function initInput(canvas: HTMLCanvasElement, onFirstGesture: () => void)
 }
 
 export function updateInput(input: Input): void {
-    const held = (...codes: string[]) => codes.some((code) => input.keys.has(code));
+    const held = (a: string, b?: string, c?: string) =>
+        input.keys.has(a) || (b !== undefined && input.keys.has(b)) || (c !== undefined && input.keys.has(c));
     let x = (held('KeyD', 'ArrowRight') ? 1 : 0) - (held('KeyA', 'ArrowLeft') ? 1 : 0);
     let y = (held('KeyW', 'ArrowUp') ? 1 : 0) - (held('KeyS', 'ArrowDown') ? 1 : 0);
     if (input.stick) {
@@ -72,7 +73,9 @@ export function updateInput(input: Input): void {
         y -= input.stick.offset[1] / STICK_RADIUS;
     }
     const length = Math.hypot(x, y);
-    input.move = length > 1 ? [x / length, y / length] : [x, y];
+    const scale = length > 1 ? 1 / length : 1;
+    input.move[0] = x * scale;
+    input.move[1] = y * scale;
     input.run = held('ShiftLeft', 'ShiftRight');
     input.jump = held('Space');
     input.crouch = held('ControlLeft', 'ControlRight', 'KeyC');
@@ -80,11 +83,15 @@ export function updateInput(input: Input): void {
     input.active = input.locked || input.touch;
 }
 
+const consumed: [number, number] = [0, 0];
+
+// The look since last time, cleared. The returned pair is reused: read it before the next call.
 export function consumeLook(input: Input): [number, number] {
-    const look: [number, number] = [input.look[0], input.look[1]];
+    consumed[0] = input.look[0];
+    consumed[1] = input.look[1];
     input.look[0] = 0;
     input.look[1] = 0;
-    return look;
+    return consumed;
 }
 
 function bindTouch(input: Input, canvas: HTMLCanvasElement, onFirstGesture: () => void) {

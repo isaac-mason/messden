@@ -32,6 +32,8 @@ const FLYBY = {
     ],
 };
 
+const WINDOW_CENTRE = new THREE.Vector3(...glassSheet().centre);
+
 export type Flyby = {
     car: THREE.Group;
     /** The underglow, as the room sees it: where, what colour, how bright (0 when no car is near). */
@@ -107,8 +109,7 @@ export function updateFlyby(flyby: Flyby, dt: number): void {
     flyby.car.position.copy(pass.from).addScaledVector(pass.direction, travelled);
     (flyby.light.position.value as THREE.Vector3).copy(flyby.car.position).y -= 0.6;
     flyby.light.brightness.value = FLYBY.brightness;
-    const { centre } = glassSheet();
-    const away = flyby.car.position.distanceTo(new THREE.Vector3(...centre));
+    const away = flyby.car.position.distanceTo(WINDOW_CENTRE);
     flyby.light.bounce.value = FLYBY.bounce * Math.min(1, 36 / (away * away));
 }
 

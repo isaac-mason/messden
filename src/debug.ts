@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import type { Focus } from './focus';
 import type { Physics } from './physics';
 import type { Player } from './player';
+import { surfaceAt, surfaceVolumes } from './surfaces';
 
 export type Debug = {
     panel: HTMLDivElement;
@@ -21,7 +22,7 @@ export function initDebug(scene: THREE.Scene, physics: Physics, player: Player):
     const debug: Debug = { panel, rows: new Map(), collider: null, frameMs: 16, sinceRefresh: 0 };
     const readout = document.createElement('div');
     readout.className = 'readout';
-    for (const name of ['fps', 'feet', 'eye', 'look', 'ground', 'focus', 'fov', 'splats', 'collider']) {
+    for (const name of ['fps', 'feet', 'eye', 'look', 'ground', 'surface', 'focus', 'fov', 'splats', 'collider']) {
         const row = document.createElement('button');
         row.type = 'button';
         row.title = 'click to copy';
@@ -43,6 +44,11 @@ export function initDebug(scene: THREE.Scene, physics: Physics, player: Player):
         if (event.code === 'Backquote') panel.hidden = !panel.hidden;
     });
     if (physics.collider) addColliderToggle(debug, scene, physics.collider);
+    const volumes = surfaceVolumes();
+    scene.add(volumes);
+    addToggle(debug, 'surfaces', false, (on) => {
+        volumes.visible = on;
+    });
     player.smoothLook = remembered('smoothLook');
     addToggle(debug, 'smooth look', player.smoothLook, (on) => {
         player.smoothLook = on;
@@ -120,6 +126,7 @@ export function updateDebug(debug: Debug, player: Player, focus: Focus, splats: 
         `{ yaw: ${player.yaw.toFixed(3)}, pitch: ${player.pitch.toFixed(3)} }`,
     );
     show(debug, 'ground', `${player.grounded ? 'yes' : 'no'}${player.crouched ? ', crouched' : ''}`);
+    show(debug, 'surface', surfaceAt(player.controller.position));
     show(debug, 'focus', `${focus.distance.toFixed(2)} m`);
     show(debug, 'fov', `${player.fov.toFixed(0)}°`);
     show(debug, 'splats', splats.collection.count.toLocaleString());

@@ -10,6 +10,8 @@ const { cos, distance, dot, float, fract, hash, min, mix, pow, sin, smoothstep, 
 
 const BOX = new THREE.Box3(new THREE.Vector3(-5.2, 0, -5.3), new THREE.Vector3(0.6, 3.3, 1.9));
 
+const BOX_SIZE = BOX.getSize(new THREE.Vector3());
+
 const DUST = {
     perCubicMetre: 11,
     scale: [0.003, 0.012],
@@ -110,7 +112,7 @@ export function updateDust(dust: Dust, camera: THREE.Camera, dt: number): void {
     dust.elapsed += dt;
     dust.time.value = dust.elapsed;
     camera.getWorldPosition(dust.camera.value);
-    const size = BOX.getSize(new THREE.Vector3());
+    const size = BOX_SIZE;
     dust.drift.value.x += (DUST.drift[0] / size.x) * dt;
     dust.drift.value.y += (DUST.drift[1] / size.y) * dt;
     dust.drift.value.z += (DUST.drift[2] / size.z) * dt;

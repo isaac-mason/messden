@@ -22,6 +22,8 @@ export function initFocus(splats: SplatRenderer): Focus {
 }
 
 const forward = new THREE.Vector3();
+const rayFrom: [number, number, number] = [0, 0, 0];
+const rayTo: [number, number, number] = [0, 0, 0];
 
 export function updateFocus(
     focus: Focus,
@@ -32,8 +34,9 @@ export function updateFocus(
     dreamy: boolean,
 ): void {
     camera.getWorldDirection(forward);
-    const { x, y, z } = camera.position;
-    const goal = rayDistance(physics, [x, y, z], [forward.x, forward.y, forward.z], MAX_FOCUS) ?? MAX_FOCUS;
+    camera.position.toArray(rayFrom);
+    forward.toArray(rayTo);
+    const goal = rayDistance(physics, rayFrom, rayTo, MAX_FOCUS) ?? MAX_FOCUS;
     focus.distance += (goal - focus.distance) * (1 - 0.5 ** (dt / PULL_SECONDS));
     splats.objectParams.focalDistance = focus.distance;
     const aperture = dreamy ? TITLE_APERTURE_TAN : APERTURE_TAN;

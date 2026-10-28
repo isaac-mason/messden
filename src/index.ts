@@ -13,6 +13,7 @@ import { initInput, updateInput } from './input';
 import { finishLoader, initLoader, setLoaderProgress, setLoaderStage } from './loader';
 import { initPhysics, loadCollider, updatePhysics } from './physics';
 import { applyPlayerCamera, initPlayer, updatePlayer, zoomAmount } from './player';
+import { surfaceAt } from './surfaces';
 import { initTitle, renderTitle, updateTitle } from './title';
 import { cutWindow } from './window';
 import './style.css';
@@ -92,7 +93,7 @@ function update(state: State, dt: number) {
     updateInput(state.input);
     if (state.title.entered) updatePlayer(state.player, state.physics, state.input, dt);
     updatePhysics(state.physics, dt);
-    updateFootsteps(state.footsteps, state.player.stepped, state.player.landed);
+    updateFootsteps(state.footsteps, state.player.stepped, state.player.landed, surfaceAt(state.player.controller.position));
     applyPlayerCamera(state.player, state.camera);
     updateTitle(state.title, state.input.active, state.camera, dt);
     updateFocus(state.focus, state.physics, state.camera, state.splats, dt, !state.title.entered);
