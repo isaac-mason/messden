@@ -1,7 +1,9 @@
 import { GpuSplats, SplatCollection, type SplatObject, TSL, type TslNode } from 'spark-radix';
 import * as THREE from 'three';
+import type { Flyby } from './flyby';
+import { throughGlass } from './window';
 
-const { cos, distance, float, fract, hash, mix, pow, sin, smoothstep, uint, uniform, vec3, vec4 } = TSL;
+const { cos, distance, dot, float, fract, hash, min, mix, pow, sin, smoothstep, uint, uniform, vec3, vec4 } = TSL;
 
 // Motes are recomputed from their index and the time every frame: nothing stored, nothing respawned.
 // The field wraps through itself as it drifts, so a mote leaving the top comes back at the bottom.
@@ -9,8 +11,8 @@ const { cos, distance, float, fract, hash, mix, pow, sin, smoothstep, uint, unif
 const BOX = new THREE.Box3(new THREE.Vector3(-5.2, 0, -5.3), new THREE.Vector3(0.6, 3.3, 1.9));
 
 const DUST = {
-    perCubicMetre: 7,
-    scale: [0.002, 0.008],
+    perCubicMetre: 11,
+    scale: [0.003, 0.012],
     swirl: { distance: 0.25, speed: 0.09 },
     bob: { distance: 0.18, speed: 0.16 },
     // Dust hangs more than it falls.
@@ -21,6 +23,9 @@ const DUST = {
     // Up close a mote would be a thumbprint on the lens.
     nearFade: 0.7,
     colours: [new THREE.Vector3(1.0, 0.96, 0.86), new THREE.Vector3(0.78, 0.82, 0.92)],
+    // The den is dark: motes barely show until a passing car's light catches them, and the beam lights up.
+    unlit: 0.6,
+    lit: { brightness: 0.3, opacity: 0.15 },
 };
 
 type Uniform<T> = TslNode & { value: T };
@@ -34,13 +39,13 @@ export type Dust = {
     elapsed: number;
 };
 
-export function initDust(): Dust {
+export function initDust(flyby: Flyby): Dust {
     const size = BOX.getSize(new THREE.Vector3());
     const count = Math.round(size.x * size.y * size.z * DUST.perCubicMetre);
     const time = uniform(0);
     const camera = uniform(new THREE.Vector3());
     const drift = uniform(new THREE.Vector3());
-    const min = vec3(BOX.min.x, BOX.min.y, BOX.min.z);
+    const corner = vec3(BOX.min.x, BOX.min.y, BOX.min.z);
     const extent = vec3(size.x, size.y, size.z);
 
     const generateSplat = (index: TslNode) => {
@@ -48,7 +53,7 @@ export function initDust(): Dust {
         const random = vec4(hash(base4), hash(base4.add(uint(1))), hash(base4.add(uint(2))), hash(base4.add(uint(3)))).toVar();
         const seed = random.w;
         const phase = seed.mul(Math.PI * 2).toVar();
-        const home = min.add(fract(random.xyz.add(drift)).mul(extent)).toVar();
+        const home = corner.add(fract(random.xyz.add(drift)).mul(extent)).toVar();
 
         const swirlTime = time.mul(DUST.swirl.speed).toVar();
         const swirl = vec3(
@@ -73,12 +78,20 @@ export function initDust(): Dust {
         const near = smoothstep(DUST.nearFade * 0.2, DUST.nearFade, distance(center, camera));
         const rgb = mix(vec3(...DUST.colours[0].toArray()), vec3(...DUST.colours[1].toArray()), fract(seed.mul(13)));
 
+        const car = flyby.light.position as unknown as TslNode;
+        const toCar = car.sub(center);
+        const beam = (flyby.light.brightness as unknown as TslNode)
+            .div(dot(toCar, toCar).max(4))
+            .mul(throughGlass(car, center))
+            .toVar();
+        const glow = (flyby.light.colour as unknown as TslNode).mul(beam.mul(DUST.lit.brightness));
+
         return GpuSplats.Splat(
             center,
             vec3(radius),
             vec4(0, 0, 0, 1),
-            rgb.mul(brightness),
-            brightness.mul(DUST.opacity).mul(near),
+            min(rgb.mul(brightness).mul(DUST.unlit).add(glow), vec3(1)),
+            min(brightness.mul(DUST.opacity).mul(DUST.unlit).add(beam.mul(DUST.lit.opacity)), float(0.9)).mul(near),
             uint(index),
         );
     };

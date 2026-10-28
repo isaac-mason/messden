@@ -2,15 +2,19 @@ import { createRenderer, GpuArrays, loadSplats, SplatCollection, SplatRenderer }
 import * as THREE from 'three';
 import sceneUrl from '../assets/scene.spz?url';
 import colliderUrl from '../assets/scene-collider.glb?url';
+import { initCity, renderCity, resizeCity } from './city';
 import { initDebug, updateDebug } from './debug';
 import { initDust, updateDust } from './dust';
+import { initFlyby, updateFlyby } from './flyby';
 import { initFocus, updateFocus } from './focus';
 import { initFootsteps, unlockFootsteps, updateFootsteps } from './footsteps';
+import { glassInView, initGlass, updateGlass } from './glass';
 import { initInput, updateInput } from './input';
 import { finishLoader, initLoader, setLoaderProgress, setLoaderStage } from './loader';
 import { initPhysics, loadCollider, updatePhysics } from './physics';
 import { applyPlayerCamera, initPlayer, updatePlayer, zoomAmount } from './player';
 import { initTitle, renderTitle, updateTitle } from './title';
+import { cutWindow } from './window';
 import './style.css';
 
 const MAX_DT = 1 / 30;
@@ -31,13 +35,18 @@ async function init() {
         loadSplats(sceneUrl, { onProgress: (fraction, stage) => setLoaderStage(loader, fraction, stage) }),
         loadCollider(physics, colliderUrl),
     ]);
-    const world = SplatCollection.arrays(GpuArrays.fromData(renderer, data));
-    const dust = initDust();
-    console.log(`homestead: ${dust.count.toLocaleString()} dust motes`);
+    const flyby = initFlyby();
+    const world = cutWindow(GpuArrays.fromData(renderer, data), flyby);
+    const dust = initDust(flyby);
+    console.log(`messden: ${dust.count.toLocaleString()} dust motes`);
 
     const splats = new SplatRenderer({ renderer, collection: new SplatCollection([world, dust.object]) });
     splats.raycast = () => {};
     scene.add(splats);
+    const city = initCity(renderer);
+    city.scene.add(flyby.car);
+    resizeCity(city, window.innerWidth, window.innerHeight, renderer.getPixelRatio());
+    const glass = initGlass(scene, city, renderer, flyby);
 
     const player = initPlayer(physics);
     const focus = initFocus(splats);
@@ -53,9 +62,28 @@ async function init() {
         camera.aspect = window.innerWidth / window.innerHeight;
         camera.updateProjectionMatrix();
         renderer.setSize(window.innerWidth, window.innerHeight);
+        resizeCity(city, window.innerWidth, window.innerHeight, renderer.getPixelRatio());
     });
 
-    return { scene, camera, renderer, splats, dust, physics, player, focus, footsteps, input, debug, vignette, title, loader };
+    return {
+        scene,
+        camera,
+        renderer,
+        splats,
+        city,
+        flyby,
+        glass,
+        dust,
+        physics,
+        player,
+        focus,
+        footsteps,
+        input,
+        debug,
+        vignette,
+        title,
+        loader,
+    };
 }
 
 type State = Awaited<ReturnType<typeof init>>;
@@ -69,6 +97,7 @@ function update(state: State, dt: number) {
     updateTitle(state.title, state.input.active, state.camera, dt);
     updateFocus(state.focus, state.physics, state.camera, state.splats, dt, !state.title.entered);
     updateDust(state.dust, state.camera, dt);
+    updateFlyby(state.flyby, dt);
 
     // the WebGL2 backend's CPU sort only runs when asked, and the dust never stops
     if (state.splats.sortMode === 'cpu') state.splats.requestSort();
@@ -77,6 +106,8 @@ function update(state: State, dt: number) {
     state.vignette.style.opacity = zoomAmount(state.player).toFixed(3);
     updateDebug(state.debug, state.player, state.focus, state.splats, dt);
     renderTitle();
+    updateGlass(state.glass, state.focus, state.camera, state.renderer, dt);
+    if (glassInView(state.glass, state.camera)) renderCity(state.city, state.renderer, state.camera);
     state.renderer.render(state.scene, state.camera);
 }
 
@@ -85,6 +116,9 @@ async function start() {
     applyPlayerCamera(state.player, state.camera);
     state.splats.prepare(state.camera);
     renderTitle();
+    await state.renderer.compileAsync(state.city.cat.scene, state.city.cat.camera);
+    await state.renderer.compileAsync(state.city.scene, state.city.camera);
+    renderCity(state.city, state.renderer, state.camera);
     await state.renderer.compileAsync(state.scene, state.camera);
     finishLoader(state.loader);
 
