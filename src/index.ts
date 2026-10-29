@@ -2,7 +2,11 @@ import { createRenderer, GpuArrays, loadSplats, SplatCollection, SplatRenderer }
 import * as THREE from 'three';
 import sceneUrl from '../assets/scene.spz?url';
 import colliderUrl from '../assets/scene-collider.glb?url';
-import { initCity, renderCity, resizeCity } from './city';
+import { initCity, renderCity, renderCityOnly, resizeCity } from './city';
+
+// ?city draws just the city, full screen, for working on it without the glass in the way.
+const CITY_ONLY = new URLSearchParams(location.search).has('city');
+
 import { initDebug, updateDebug } from './debug';
 import { initDust, updateDust } from './dust';
 import { initFlyby, updateFlyby } from './flyby';
@@ -108,6 +112,10 @@ function update(state: State, dt: number) {
     updateDebug(state.debug, state.player, state.focus, state.splats, dt);
     renderTitle();
     updateGlass(state.glass, state.focus, state.camera, state.renderer, dt);
+    if (CITY_ONLY) {
+        renderCityOnly(state.city, state.renderer, state.camera);
+        return;
+    }
     if (glassInView(state.glass, state.camera)) renderCity(state.city, state.renderer, state.camera);
     state.renderer.render(state.scene, state.camera);
 }

@@ -13,6 +13,7 @@ const {
     dot,
     float,
     length,
+    log2,
     max,
     min,
     mix,
@@ -61,7 +62,6 @@ export function initGlass(scene: THREE.Scene, city: City, renderer: WebGPURender
     const webgpu = renderer.coordinateSystem === THREE.WebGPUCoordinateSystem;
     const at = vec2(screenUV.x, webgpu ? screenUV.y : float(1).sub(screenUV.y));
     const toScreen = (v: TslNode) => vec2(v.x, webgpu ? v.y.negate() : v.y);
-    const sample = (where: TslNode) => min(texture(city.target.texture, where).rgb, vec3(MAX_LIGHT));
 
     // Depth of field, as the splats do it: how wide the glass's blur circle is on screen.
     const focal = uniform(2);
@@ -80,24 +80,26 @@ export function initGlass(scene: THREE.Scene, city: City, renderer: WebGPURender
     const wiped = texture(rain.wiped.texture, uv()).a;
     const clear = max(cover, wiped.mul(0.85)).toVar();
 
-    // Frost: a fixed spiral of taps; turning it per pixel looked grainy but twinkled as the city moved behind.
-    let frostSum: TslNode = vec3(0);
-    for (let i = 0; i < FROST.taps; i++) {
-        const angle = i * 2.399963;
-        const reach = defocusTexels.add(FROST.radius).mul(Math.sqrt((i + 0.5) / FROST.taps));
-        frostSum = frostSum.add(sample(at.add(city.texel.mul(vec2(Math.cos(angle), Math.sin(angle)).mul(reach)))));
-    }
-    const frosted = frostSum.div(FROST.taps).mul(FROST.tint).add(FROST.lift);
+    // Blurred by reading a softer mip level, with four taps a little apart so its texels don't show as blocks.
+    const blurred = (where: TslNode, radius: TslNode) => {
+        const level = log2(radius.max(1)).toVar();
+        const spread = city.texel.mul(radius.mul(0.5));
+        let sum: TslNode = vec3(0);
+        for (const [x, y] of [
+            [0.5, 0.2],
+            [-0.2, 0.5],
+            [-0.5, -0.2],
+            [0.2, -0.5],
+        ]) {
+            sum = sum.add(min(texture(city.target.texture, where.add(spread.mul(vec2(x, y)))).level(level).rgb, vec3(MAX_LIGHT)));
+        }
+        return sum.div(4);
+    };
+    const frosted = blurred(at, defocusTexels.add(FROST.radius)).mul(FROST.tint).add(FROST.lift);
 
     // Through water: bent the other way, as a lens flips what's behind it, and only a little soft.
     const lensed = at.add(toScreen(slope.mul(cover).mul(-LENS)));
-    let clearSum: TslNode = vec3(0);
-    for (let i = 0; i < 8; i++) {
-        const angle = i * 2.399963;
-        const reach = defocusTexels.add(CLEAR.radius).mul(Math.sqrt((i + 0.5) / 8));
-        clearSum = clearSum.add(sample(lensed.add(city.texel.mul(vec2(Math.cos(angle), Math.sin(angle)).mul(reach)))));
-    }
-    const sharp = clearSum.div(8).mul(CLEAR.tint);
+    const sharp = blurred(lensed, defocusTexels.add(CLEAR.radius)).mul(CLEAR.tint);
 
     // A drop darkens toward its steep rim, and its top catches the room's light.
     const rim = smoothstep(0.55, 0.95, length(slope)).mul(cover);

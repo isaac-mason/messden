@@ -44,13 +44,16 @@ const {
 
 const STREET = -70;
 // Half the screen's resolution: the glass blurs it anyway.
-export const CITY_SCALE = 0.5;
+export const CITY_SCALE = 0.75;
 
-const TOWERS = { cell: 24, near: 32, far: 820, spread: 1.4, skip: 0.18, width: [9, 20], height: [18, 140], tallFar: 1.8 };
+const TOWERS = { cell: 24, near: 55, far: 820, spread: 1.4, skip: 0.18, width: [9, 20], height: [18, 140], tallFar: 1.8 };
 const SINK = 0.05;
 const TIERS = { chance: 0.55, from: 60, shrink: [0.55, 0.8], height: [0.15, 0.35], spire: 0.22, clutter: 3 };
-const WINDOWS = { width: 2.4, height: 3.6, lit: [0.2, 0.75], flicker: 0.04 };
-const EDGES = { chance: 0.22, width: 0.35, brightness: 3.2 };
+// A window bay across, a floor up, in metres; how many are lit; how many flicker.
+const WINDOWS = { width: 1.7, height: 3.4, lit: [0.2, 0.7], flicker: 0.03 };
+// Facades lit from below by the street's glow, fading with height, and a little from the sky.
+const FACADE = { uplight: vec3(0.5, 0.16, 0.2), uplightFade: 70, skylight: vec3(0.05, 0.05, 0.11), occlusion: 1.6 };
+const EDGES = { chance: 0.08, width: 0.25, brightness: 2 };
 const BEACONS = { from: 110, size: 1.3, rate: 1.1 };
 const NEON = [
     [1, 0.15, 0.7],
@@ -83,7 +86,8 @@ const SIGNS_TEXT = {
     dumplings: { text: '🥟 DUMPLINGS ARE\nA HUG YOU CAN EAT', colour: '#9dff5a', blink: 0 },
 };
 const CATJAM = { columns: 13, frames: 158, fps: 25 };
-const TRAFFIC = { cars: 420, lanes: 9, length: 1400, speed: [18, 45], trail: 9 };
+// Streams of traffic far enough out to read as threads of light; closer, the glass frosts them into blobs.
+const TRAFFIC = { cars: 360, lanes: 9, length: 1400, speed: [18, 45], trail: 3.5, depth: [160, 600] };
 const TRAINS = { lines: 3, cars: 9, carLength: 18, length: 2200, speed: [28, 40] };
 const BLIMPS = { count: 2, size: [46, 13], speed: 3 };
 const MEGA = { count: 7, depth: [1350, 1900], height: [380, 900], width: [120, 260] };
@@ -101,7 +105,18 @@ const RAIN = {
     colour: vec3(0.6, 0.65, 0.85).mul(0.22),
 };
 // Distance haze, thicker and warmer low down where the streets glow up through it.
-const FOG = { colour: vec3(0.32, 0.09, 0.3), low: vec3(0.55, 0.16, 0.22), density: 0.0042, lowHeight: 35, lowExtra: 1.6 };
+// Distance haze, clear close by and thickening with distance; warm low down where the streets glow up through it,
+// magenta through the middle, cooler up high.
+const FOG = {
+    colour: vec3(0.17, 0.05, 0.17),
+    low: vec3(0.36, 0.1, 0.14),
+    high: vec3(0.07, 0.04, 0.13),
+    density: 0.0042,
+    falloff: 1.5,
+    lowHeight: 35,
+    lowExtra: 1.6,
+    highFrom: 60,
+};
 
 export type City = {
     scene: THREE.Scene;
@@ -115,7 +130,12 @@ export function initCity(renderer: WebGPURenderer): City {
     const scene = new THREE.Scene();
     scene.backgroundNode = smogSky();
     const camera = new THREE.PerspectiveCamera(70, 1, 1, 4000);
-    const target = new RenderTarget(1, 1, { type: THREE.HalfFloatType });
+    // Mipmapped, so the glass can blur it smoothly by reading a softer level rather than scattering taps.
+    const target = new RenderTarget(1, 1, {
+        type: THREE.HalfFloatType,
+        generateMipmaps: true,
+        minFilter: THREE.LinearMipmapLinearFilter,
+    });
 
     const { centre, along } = glassSheet();
     const frame = { origin: new THREE.Vector3(...centre), x: new THREE.Vector3(...along), z: new THREE.Vector3(...OUT) };
@@ -171,6 +191,16 @@ export function renderCity(city: City, renderer: WebGPURenderer, view: THREE.Per
     renderer.setRenderTarget(city.target);
     renderer.render(city.scene, city.camera);
     renderer.setRenderTarget(null);
+}
+
+export function renderCityOnly(city: City, renderer: WebGPURenderer, view: THREE.PerspectiveCamera): void {
+    renderCatVideo(city.cat, renderer, performance.now() / 1000);
+    city.camera.position.copy(view.position);
+    city.camera.quaternion.copy(view.quaternion);
+    city.camera.fov = view.fov;
+    city.camera.aspect = view.aspect;
+    city.camera.updateProjectionMatrix();
+    renderer.render(city.scene, city.camera);
 }
 
 /* layout */
@@ -285,41 +315,80 @@ function buildings({ at, facing }: Place, towers: Tower[]) {
     const seed = attribute('towerSeed', 'float').mul(97.3);
     const size = attribute('blockSize', 'vec3');
     const side = abs(normalWorld.y).lessThan(0.5);
-
-    // Windows, in metres across each face and up: a grid, horizontal bands, or vertical strips, by tower.
-    const across = positionWorld.x.mul(normalWorld.z).sub(positionWorld.z.mul(normalWorld.x));
-    const grid = vec2(across.div(WINDOWS.width), positionWorld.y.div(WINDOWS.height));
-    const cell = floor(grid);
-    const inside = fract(grid);
-    const style = hash(seed.add(4.2));
-    const paneX = smoothstep(0.12, 0.2, inside.x).mul(smoothstep(0.88, 0.8, inside.x));
-    const paneY = smoothstep(0.18, 0.28, inside.y).mul(smoothstep(0.85, 0.75, inside.y));
-    const pane = select(style.lessThan(0.6), paneX.mul(paneY), select(style.lessThan(0.82), paneY, paneX));
-    // Bands light whole floors, strips whole columns; some floors are simply dark.
-    const unit = select(style.lessThan(0.6), cell, select(style.lessThan(0.82), vec2(0, cell.y), vec2(cell.x, 0)));
-    const roll = hash(unit.x.mul(13.7).add(unit.y.mul(71.3)).add(seed.mul(101)));
-    const darkFloor = step(hash(cell.y.mul(5.1).add(seed)), 0.12);
-    const occupancy = mix(WINDOWS.lit[0], WINDOWS.lit[1], hash(seed));
-    const flickering = hash(roll.mul(999)).lessThan(WINDOWS.flicker);
-    const on = step(roll, occupancy)
-        .mul(float(1).sub(darkFloor))
-        .mul(select(flickering, step(0, sin(time.mul(hash(roll).mul(9).add(2)).add(roll.mul(40)))), float(1)));
-    const tone = hash(roll.mul(31.7));
-    const neon = mix(vec3(1, 0.2, 0.75), vec3(0.2, 0.95, 1), hash(seed.mul(3)));
-    const light = select(tone.lessThan(0.08), neon, mix(vec3(1, 0.68, 0.38), vec3(0.55, 0.78, 1), step(0.62, tone))).mul(
-        mix(0.6, 2.2, hash(roll.mul(5.1))),
-    );
-    const wall = mix(vec3(0.012, 0.012, 0.02), vec3(0.03, 0.025, 0.045), hash(seed.mul(1.7)));
-    // Once a window's about a pixel, its pattern only shimmers: show its average glow instead.
-    const tiny = smoothstep(0.35, 0.9, max(fwidth(grid.x), fwidth(grid.y)));
-    const lit = mix(wall, light, mix(pane.mul(on), occupancy.mul(0.35), tiny));
-
-    // Neon strips up the corners and round the top of some towers: the outlined skyline.
     // The box's own vertex, before instancing: positionLocal already has each block's placement and scale in it.
     const local = attribute('position', 'vec3').mul(size).toVar();
     const fromSideX = size.x.mul(0.5).sub(abs(local.x));
     const fromSideZ = size.z.mul(0.5).sub(abs(local.z));
     const fromTop = size.y.sub(local.y);
+
+    // Windows, in metres across each face and up: a bay grid, mullions and floor slabs between.
+    const across = positionWorld.x.mul(normalWorld.z).sub(positionWorld.z.mul(normalWorld.x));
+    const grid = vec2(across.div(WINDOWS.width), positionWorld.y.div(WINDOWS.height));
+    const cell = floor(grid);
+    const inside = fract(grid);
+    const pane = smoothstep(0.06, 0.1, inside.x)
+        .mul(smoothstep(0.94, 0.9, inside.x))
+        .mul(smoothstep(0.16, 0.2, inside.y))
+        .mul(smoothstep(0.9, 0.86, inside.y));
+    // Offices light a whole floor; homes window by window. Some floors are dark either way.
+    const offices = hash(seed.add(4.2)).lessThan(0.35);
+    // Offices light in runs of bays, a floor at a time, with gaps where the lights are off.
+    const run = floor(cell.x.div(4));
+    const unit = select(offices, vec2(run, cell.y), cell);
+    const roll = hash(unit.x.mul(13.7).add(unit.y.mul(71.3)).add(seed.mul(101)));
+    const darkFloor = step(hash(cell.y.mul(5.1).add(seed)), 0.1);
+    const occupancy = mix(WINDOWS.lit[0], WINDOWS.lit[1], hash(seed)).mul(select(offices, float(0.6), float(1)));
+    const flickering = hash(roll.mul(999)).lessThan(WINDOWS.flicker);
+    const on = step(roll, occupancy)
+        .mul(float(1).sub(darkFloor))
+        .mul(select(flickering, step(0, sin(time.mul(hash(roll).mul(9).add(2)).add(roll.mul(40)))), float(1)));
+    // What's inside: offices cool white strip-lit, homes warm, now and then a TV's blue or a neon sign's glow;
+    // brighter toward the ceiling, some with blinds, some half-curtained.
+    const tone = hash(roll.mul(31.7));
+    const warm = mix(vec3(1, 0.62, 0.32), vec3(1, 0.78, 0.5), hash(roll.mul(7.7)));
+    const cool = vec3(0.75, 0.97, 0.92);
+    const neon = mix(vec3(1, 0.2, 0.75), vec3(0.2, 0.95, 1), hash(seed.mul(3)));
+    const tint = select(offices, cool, select(tone.lessThan(0.07), neon, select(tone.lessThan(0.15), vec3(0.35, 0.5, 1), warm)));
+    const ceiling = mix(0.45, 1, smoothstep(0.2, 0.85, inside.y));
+    const blinds = select(hash(roll.mul(3.3)).lessThan(0.3), sin(inside.y.mul(60)).mul(0.25).add(0.75), float(1));
+    const curtain = select(hash(roll.mul(5.9)).lessThan(0.2), smoothstep(0.45, 0.55, inside.x).mul(0.8).add(0.2), float(1));
+    const brightness = select(offices, mix(1.1, 1.8, hash(roll.mul(5.1))), mix(0.7, 2, hash(roll.mul(5.1))));
+    const light = tint.mul(brightness).mul(ceiling).mul(blinds).mul(curtain);
+    // Unlit glass isn't black: it mirrors the city's glow.
+    const glass = mix(vec3(0.03, 0.02, 0.06), FOG.colour.mul(0.35), smoothstep(-0.2, 0.6, inside.y));
+
+    // The wall: its own dark material, lit from the street below and the sky above, darker into its corners, with
+    // panel seams and wet streaks so it isn't a flat slab.
+    const material3 = hash(seed.mul(1.7));
+    const base = select(
+        material3.lessThan(0.4),
+        vec3(0.03, 0.032, 0.04),
+        select(material3.lessThan(0.75), vec3(0.04, 0.03, 0.028), vec3(0.025, 0.03, 0.045)),
+    );
+    const height = positionWorld.y.sub(cameraPosition.y.add(STREET));
+    const uplight = FACADE.uplight.mul(exp(height.div(-FACADE.uplightFade)));
+    const corner = smoothstep(0, FACADE.occlusion, min(fromSideX, fromSideZ)).mul(0.45).add(0.55);
+    const panels = mx_noise_float(vec3(across.mul(0.35), positionWorld.y.mul(0.35), seed))
+        .mul(0.25)
+        .add(1);
+    const streaks = mx_noise_float(vec3(across.mul(2.5), positionWorld.y.mul(0.06), seed))
+        .mul(0.5)
+        .add(0.5);
+    const wall = base
+        .mul(panels)
+        .add(uplight.mul(0.35))
+        .add(FACADE.skylight.mul(0.4))
+        .add(FOG.colour.mul(pow(streaks, 6).mul(0.25)))
+        .mul(corner);
+    const slab = smoothstep(0.08, 0.04, inside.y).mul(0.6);
+    const windows = mix(glass, light, on);
+    const facade = mix(wall, windows, pane.mul(float(1).sub(slab)));
+    // Once a window's about a pixel, its pattern only shimmers: show its average glow instead.
+    const tiny = smoothstep(0.35, 0.9, max(fwidth(grid.x), fwidth(grid.y)));
+    const lit = mix(facade, mix(wall, light, occupancy.mul(0.4)), tiny);
+    const roof = base.mul(0.8).add(FACADE.skylight.mul(0.6));
+
+    // Neon strips up the corners and round the top of some towers: the outlined skyline.
     // Never thinner than about a pixel, and dimmer as they would be: a strip far off is a faint steady line, not one
     // flickering on and off as the view sways.
     const strip = (distance: TslNode) => {
@@ -327,12 +396,14 @@ function buildings({ at, facing }: Place, towers: Tower[]) {
         const width = max(float(EDGES.width), pixel);
         return smoothstep(width.add(pixel.mul(0.5)), width.sub(pixel.mul(0.5)), distance).mul(float(EDGES.width).div(width));
     };
-    const corner = strip(max(fromSideX, fromSideZ));
-    const rim = strip(fromTop).mul(strip(min(fromSideX, fromSideZ)));
-    const outlined = step(hash(seed.add(9.1)), EDGES.chance).mul(max(corner, rim));
+    const edge = strip(max(fromSideX, fromSideZ));
+    // Corners only, on few towers: outlining every edge made them read as wireframes.
+    const outlined = step(hash(seed.add(9.1)), EDGES.chance)
+        .mul(edge)
+        .mul(smoothstep(0, 6, fromTop));
     const edgeColour = neonPick(hash(seed.add(11.3))).mul(EDGES.brightness);
 
-    material.colorNode = fogged(mix(select(side, lit, wall.mul(0.6)), edgeColour, outlined));
+    material.colorNode = fogged(mix(select(side, lit, roof), edgeColour, outlined));
     return mesh;
 }
 
@@ -473,7 +544,7 @@ function ads({ at, facing }: Place, towers: Tower[]) {
 
 // Cars as light trails: brightest at the front, fading back along their length.
 function traffic({ at, frame }: Place) {
-    const geometry = new THREE.BoxGeometry(TRAFFIC.trail, 0.45, 0.8);
+    const geometry = new THREE.BoxGeometry(TRAFFIC.trail, 0.22, 0.5);
     const material = new MeshBasicNodeMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending });
     const mesh = new THREE.InstancedMesh(geometry, material, TRAFFIC.cars);
     const identity = new THREE.Matrix4();
@@ -482,8 +553,8 @@ function traffic({ at, frame }: Place) {
 
     const seed = float(instanceIndex);
     const laneSeed = floor(hash(seed.mul(1.3)).mul(TRAFFIC.lanes)).mul(9.17);
-    const height = mix(-20, 70, hash(laneSeed));
-    const depth = mix(45, 420, hash(laneSeed.add(3)));
+    const height = mix(-30, 60, hash(laneSeed));
+    const depth = mix(TRAFFIC.depth[0], TRAFFIC.depth[1], hash(laneSeed.add(3)));
     const forward = step(0.5, hash(seed.mul(2.9)));
     const direction = forward.mul(2).sub(1);
     const speed = mix(TRAFFIC.speed[0], TRAFFIC.speed[1], hash(seed.mul(4.4)));
@@ -503,7 +574,7 @@ function traffic({ at, frame }: Place) {
         .add(placed);
     const front = positionLocal.x.mul(direction).div(TRAFFIC.trail).add(0.5);
     const head = select(forward.greaterThan(0.5), vec3(1, 0.95, 0.85), vec3(1, 0.12, 0.08));
-    material.colorNode = head.mul(pow(front, 2.5).mul(3)).mul(exp(positionWorld.sub(cameraPosition).length().mul(-FOG.density)));
+    material.colorNode = head.mul(pow(front, 3).mul(0.85)).mul(exp(positionWorld.sub(cameraPosition).length().mul(-FOG.density)));
     return mesh;
 }
 
@@ -631,11 +702,14 @@ function megastructure({ at, facing }: Place) {
     return mesh;
 }
 
+// Wet asphalt far below: dark, puddled, catching the city's glow, with pools of light under the lamps.
 function street({ at, facing }: Place) {
     const material = new MeshBasicNodeMaterial();
-    const grid = fract(positionWorld.xz.div(24));
-    const lamps = step(0.94, grid.x).add(step(0.94, grid.y)).min(1);
-    material.colorNode = fogged(mix(vec3(0.01, 0.008, 0.015), vec3(1, 0.55, 0.25).mul(0.8), lamps.mul(0.6)));
+    const puddles = smoothstep(0.1, 0.5, mx_noise_float(vec3(positionWorld.xz.mul(0.03), 0)));
+    const lamp = fract(positionWorld.xz.div(24)).sub(0.5).length();
+    const pools = smoothstep(0.3, 0, lamp).mul(0.5);
+    const asphalt = mix(vec3(0.012, 0.01, 0.016), FOG.low.mul(0.45), puddles.mul(0.6));
+    material.colorNode = fogged(asphalt.add(vec3(1, 0.55, 0.28).mul(pools.mul(0.35))));
     const ground = new THREE.Mesh(new THREE.PlaneGeometry(6000, 6000).rotateX(-Math.PI / 2), material);
     ground.position.copy(at(0, STREET, 0));
     ground.quaternion.copy(facing);
@@ -739,12 +813,14 @@ function rain({ at, frame }: Place) {
 
 /* air */
 
-// Distance haze over everything, thicker and warmer near the streets, so the city melts into its own glow.
-function fogged(colour: TslNode): TslNode {
+export function fogged(colour: TslNode): TslNode {
     const distance = positionWorld.sub(cameraPosition).length();
-    const low = exp(positionWorld.y.sub(cameraPosition.y.add(STREET)).div(-FOG.lowHeight)).min(1);
-    const amount = float(1).sub(exp(distance.mul(-FOG.density).mul(low.mul(FOG.lowExtra).add(1))));
-    return mix(colour, mix(FOG.colour, FOG.low, low), amount);
+    const height = positionWorld.y.sub(cameraPosition.y.add(STREET));
+    const low = exp(height.div(-FOG.lowHeight)).min(1);
+    const high = smoothstep(FOG.highFrom, FOG.highFrom * 4, height);
+    const thickness = pow(distance.mul(FOG.density), FOG.falloff).mul(low.mul(FOG.lowExtra).add(1));
+    const haze = mix(mix(FOG.colour, FOG.low, low), FOG.high, high);
+    return mix(colour, haze, float(1).sub(exp(thickness.negate())));
 }
 
 function smogSky(): TslNode {

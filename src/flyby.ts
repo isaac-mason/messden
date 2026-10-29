@@ -1,9 +1,10 @@
-import { TSL } from 'spark-radix';
+import { TSL, type TslNode } from 'spark-radix';
 import * as THREE from 'three';
 import { MeshBasicNodeMaterial } from 'three/webgpu';
+import { fogged } from './city';
 import { glassSheet, OUT } from './window-panes';
 
-const { uniform, vec3 } = TSL;
+const { abs, float, mix, normalWorld, pow, uniform, vec3 } = TSL;
 
 // Every few seconds a neon car streaks past close outside, its underglow lighting the room through the window.
 const FLYBY = {
@@ -55,28 +56,48 @@ export function initFlyby(): Flyby {
     const bright = (colour: ReturnType<typeof uniform>, amount: number) =>
         (colour as unknown as { mul(n: number): ReturnType<typeof uniform> }).mul(amount);
     const car = new THREE.Group();
-    const part = (
-        size: [number, number, number],
-        colour: THREE.Vector3 | ReturnType<typeof uniform>,
-        at: [number, number, number],
-    ) => {
+    const lit = (colour: TslNode) => {
         const material = new MeshBasicNodeMaterial();
-        material.colorNode = colour instanceof THREE.Vector3 ? vec3(colour.x, colour.y, colour.z) : colour;
-        const mesh = new THREE.Mesh(new THREE.BoxGeometry(...size), material);
+        material.colorNode = fogged(colour);
+        return material;
+    };
+    const add = (
+        geometry: THREE.BufferGeometry,
+        material: MeshBasicNodeMaterial,
+        at: [number, number, number],
+        scale: [number, number, number] = [1, 1, 1],
+    ) => {
+        const mesh = new THREE.Mesh(geometry, material);
         mesh.position.set(...at);
+        mesh.scale.set(...scale);
         car.add(mesh);
     };
-    // Facing +x: body, cabin, neon strips down each side and a light bar on the roof, the underglow, headlights ahead,
-    // taillights behind.
-    part([4.6, 0.9, 2], new THREE.Vector3(0.02, 0.02, 0.03), [0, 0, 0]);
-    part([2.2, 0.6, 1.7], new THREE.Vector3(0.05, 0.08, 0.12), [-0.3, 0.7, 0]);
-    part([4.4, 0.06, 0.04], bright(trim, 6), [0, 0.15, 1.01]);
-    part([4.4, 0.06, 0.04], bright(trim, 6), [0, 0.15, -1.01]);
-    part([1.6, 0.05, 0.08], bright(trim, 6), [-0.3, 1.02, 0]);
-    part([4.2, 0.12, 1.8], bright(glow, 5), [0, -0.5, 0]);
-    part([0.15, 0.25, 0.45], new THREE.Vector3(6, 5.6, 5), [2.32, 0.1, 0.6]);
-    part([0.15, 0.25, 0.45], new THREE.Vector3(6, 5.6, 5), [2.32, 0.1, -0.6]);
-    part([0.12, 0.2, 1.6], new THREE.Vector3(4, 0.3, 0.2), [-2.32, 0.15, 0]);
+    // Facing +x: a long tapered body, shaded lighter on top with a rim of the city's glow; a tinted canopy; neon strips
+    // along its flanks; the underglow; headlights ahead, a taillight bar behind.
+    const shade = normalWorld.y.mul(0.5).add(0.5);
+    const body = mix(vec3(0.015, 0.015, 0.022), vec3(0.09, 0.09, 0.12), shade).add(
+        vec3(0.3, 0.1, 0.3).mul(pow(float(1).sub(abs(normalWorld.y)), 4).mul(0.2)),
+    );
+    const hull = new THREE.CapsuleGeometry(0.62, 3.4, 6, 12).rotateZ(Math.PI / 2);
+    add(hull, lit(body), [0, 0, 0], [1, 0.62, 1.25]);
+    add(
+        new THREE.SphereGeometry(0.7, 16, 10),
+        lit(vec3(0.05, 0.12, 0.16).add(vec3(0.2, 0.3, 0.35).mul(shade.mul(0.4)))),
+        [-0.2, 0.38, 0],
+        [1.6, 0.5, 0.85],
+    );
+    const strip = new THREE.CapsuleGeometry(0.035, 3.6, 2, 6).rotateZ(Math.PI / 2);
+    add(strip, lit(bright(trim, 5) as unknown as TslNode), [0, 0.02, 0.79]);
+    add(strip, lit(bright(trim, 5) as unknown as TslNode), [0, 0.02, -0.79]);
+    add(
+        new THREE.CircleGeometry(1, 24).rotateX(Math.PI / 2),
+        lit(bright(glow, 4) as unknown as TslNode),
+        [0, -0.42, 0],
+        [2.2, 1, 0.75],
+    );
+    add(new THREE.SphereGeometry(0.13, 8, 6), lit(vec3(6, 5.6, 5)), [2.25, 0.02, 0.45]);
+    add(new THREE.SphereGeometry(0.13, 8, 6), lit(vec3(6, 5.6, 5)), [2.25, 0.02, -0.45]);
+    add(new THREE.CapsuleGeometry(0.06, 1.1, 2, 6).rotateX(Math.PI / 2), lit(vec3(4, 0.3, 0.2)), [-2.3, 0.08, 0]);
     car.visible = false;
 
     return {
