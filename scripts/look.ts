@@ -97,7 +97,6 @@ function render(out: string, cut: boolean) {
     console.log(`${out}: ${visible.length.toLocaleString()} splats drawn`);
 }
 
-// Where a pixel's ray meets the glass sheet, magenta: anything the splats don't cover shows as a gap.
 function fillGlass(image: Float32Array, basis: ReturnType<typeof cameraBasis>, focal: number) {
     const sheet = glassSheet();
     const { width, height } = camera;
@@ -124,7 +123,6 @@ function fillGlass(image: Float32Array, basis: ReturnType<typeof cameraBasis>, f
     }
 }
 
-// The clean frame, solid on top: only its face toward the room, which is what's seen.
 function drawFrame(image: Float32Array, basis: ReturnType<typeof cameraBasis>, focal: number) {
     const origin = PANES[0].corner;
     const along = [-OUT[2], 0, OUT[0]];
@@ -138,7 +136,6 @@ function drawFrame(image: Float32Array, basis: ReturnType<typeof cameraBasis>, f
             const ray = [0, 1, 2].map((k) => basis.right[k] * x + basis.up[k] * y - basis.back[k]);
             const facing = dot(ray, into);
             if (Math.abs(facing) < 1e-6) continue;
-            // The face sits FRAME.depth into the room from the glass.
             const face = origin.map((v, k) => v + into[k] * FRAME.depth);
             const t =
                 dot(
@@ -157,7 +154,6 @@ function drawFrame(image: Float32Array, basis: ReturnType<typeof cameraBasis>, f
     }
 }
 
-// Faint lines every 100 px, labelled by position, so a pixel can be read off the image.
 function drawGrid(image: Float32Array, width: number, height: number) {
     for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {

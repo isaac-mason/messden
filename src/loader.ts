@@ -1,6 +1,5 @@
 import type { ProgressStage } from 'spark-radix';
 
-// Share of the bar each stage fills; the rest is the shader compile.
 const STAGES: Partial<Record<ProgressStage, [number, number]>> = {
     downloading: [0, 0.75],
     decoding: [0.75, 0.92],

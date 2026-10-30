@@ -17,15 +17,11 @@ const DUST = {
     scale: [0.003, 0.012],
     swirl: { distance: 0.25, speed: 0.09 },
     bob: { distance: 0.18, speed: 0.16 },
-    // Dust hangs more than it falls.
     drift: [0.012, -0.006, 0.004],
     opacity: 0.55,
-    // A slow glint as a mote tumbles through the light, not a blink.
     twinkle: { depth: 0.65, sharpness: 2, speed: 0.07 },
-    // Up close a mote would be a thumbprint on the lens.
     nearFade: 0.7,
     colours: [new THREE.Vector3(1.0, 0.96, 0.86), new THREE.Vector3(0.78, 0.82, 0.92)],
-    // The den is dark: motes barely show until a passing car's light catches them, and the beam lights up.
     unlit: 0.6,
     lit: { brightness: 0.3, opacity: 0.15 },
 };
@@ -69,7 +65,6 @@ export function initDust(flyby: Flyby): Dust {
             .add(vec3(0, bob, 0))
             .toVar();
 
-        // Most motes small, a few large.
         const size = fract(seed.mul(97));
         const radius = mix(DUST.scale[0], DUST.scale[1], size.mul(size).mul(size));
 

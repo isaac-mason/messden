@@ -13,14 +13,10 @@ import { EDGE, MARGIN, OUT, PANES, SILL, WALL } from './window-panes';
 
 const { abs, dot, float, If, max, min, mix, normalize, smoothstep, sRGBTransferEOTF, sRGBTransferOETF, vec3 } = TSL;
 
-// Share of the car's light added outright, on top of what each surface reflects.
 const GLOW = 0.015;
-// How big the car's glow is as a light, in metres: the window's shadow edges soften by it with distance.
 const PENUMBRA = 0.6;
-// Round splats (leaves, fuzz) have no facing: they take this much of the light from any side.
 const WRAP = 0.6;
 
-// How squarely a splat faces the light: by its thinnest axis if it's flat, either side, or a soft wrap if it's round.
 function facing(splat: SplatNode, toLight: TslNode): TslNode {
     const scales = splat.get('scales').toVar();
     const thinnest = min(scales.x, min(scales.y, scales.z));
@@ -33,13 +29,11 @@ function facing(splat: SplatNode, toLight: TslNode): TslNode {
     return mix(float(WRAP), abs(dot(GpuSplats.normalOf(splat), toLight)), flat);
 }
 
-// The den's splats, less the window's, lit by any car passing close outside, through the panes only.
 export function cutWindow(arrays: GpuArrays, flyby: Flyby): AnySplatObject {
     const stored = SplatGenerator.fromSplats();
     const out = vec3(...OUT);
 
     // Unrolled over the panes rather than looped: a TSL Loop here has silently broken meshes before.
-    // 1 where a splat is the window's to cut: in a pane's slab, or near one and glass-coloured (see window-panes.ts).
     const inWindow = (centre: TslNode, rgb: TslNode): TslNode => {
         const [r, g, b] = [rgb.x, rgb.y, rgb.z];
         const glass = b
@@ -104,8 +98,6 @@ export function cutWindow(arrays: GpuArrays, flyby: Flyby): AnySplatObject {
                         .div(toCar.dot(toCar).max(4))
                         .mul(throughGlass(lightFrom, centre))
                         .mul(facing(splat, normalize(toCar)));
-                    // Light off a surface takes its colour: lift the splat's own colour, in linear light, plus a
-                    // little of the light's own so the den's near-black corners still catch the neon.
                     const albedo = sRGBTransferEOTF(max(splat.get('rgb'), vec3(0)));
                     const lit = albedo
                         .mul(vec3(1).add(lightColour.mul(reaching.add(lightBounce))))
@@ -121,7 +113,6 @@ export function cutWindow(arrays: GpuArrays, flyby: Flyby): AnySplatObject {
     });
 }
 
-// How much of the line from the car to a point passes through glass: 1 through a pane, 0 through wall or frame.
 export function throughGlass(from: TslNode, to: TslNode): TslNode {
     const out = vec3(...OUT);
     let through: TslNode = float(0);
@@ -134,7 +125,6 @@ export function throughGlass(from: TslNode, to: TslNode): TslNode {
         const hit = from.add(ray.mul(along)).sub(corner).toVar();
         const s = hit.dot(vec3(...pane.across.map((v) => v / width)));
         const t = hit.dot(vec3(...pane.up.map((v) => v / height)));
-        // Softer the further the light carries past the glass, against how far the car is from it.
         const soft = float(1).sub(along).div(along.max(0.05)).mul(PENUMBRA).clamp(0.01, 0.35).toVar();
         // `soft` is a node: its arithmetic has to be too.
         through = through.max(

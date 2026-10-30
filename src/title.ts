@@ -11,20 +11,14 @@ const TITLE = {
     text: 'the den',
     color: '#f6eedd',
     distance: 2.4,
-    // Never closer than this share of the way to whatever's ahead.
     clearance: 0.7,
-    // Share of the screen's width the word spans, landscape and portrait.
     width: { landscape: 0.46, portrait: 0.82 },
-    // Up from the middle of the screen, as a share of its height: the upper third.
     raise: 0.17,
-    // A dark copy just behind, down and to the right, in font-size units: lifts it off busy shelves.
     shadow: { color: '#0d0b09', opacity: 0.3, offset: [0.02, -0.028], depth: 0.01 },
 };
 const SWAY = { yaw: 0.008, pitch: 0.004, speed: 0.12 };
 const EXIT_SECONDS = 0.7;
-// It stays up in the room after you click in, until you've walked this far from where you started.
 const WALK_AWAY = 1;
-// Screen pixels per dither cell: chunky enough to read as a dissolve, not a fade.
 const DITHER_PIXELS = 2;
 
 export type Title = {
@@ -39,7 +33,6 @@ export type Title = {
     dissolve: ReturnType<typeof uniform>;
     entered: boolean;
     exit: number;
-    // 0 on the title screen, 1 once clicked in: the frame and the sway go then.
     settle: number;
     time: number;
 };
@@ -52,13 +45,11 @@ export async function initTitle(scene: THREE.Scene, camera: THREE.Camera, physic
     // Drawn after the splats, which write no depth: otherwise they'd blend over it.
     const dissolve = uniform(0);
     const group = three.createTextGroup({ renderOrder: 10, material: ditheredMaterial(dissolve) });
-    // Created first, so it draws first.
     const shadow = three.createText({ font, text: TITLE.text, style: shadowStyle() }) as unknown as Text<never>;
     const text = three.createText({ font, text: TITLE.text, style: textStyle() }) as unknown as Text<never>;
     group.add(shadow, text);
     scene.add(group);
 
-    // Laid out from its top-left corner: centre it on the group.
     const { width, height } = text.measure();
     text.position.set(-width / 2, height / 2, 0);
     shadow.position.set(-width / 2 + TITLE.shadow.offset[0], height / 2 + TITLE.shadow.offset[1], -TITLE.shadow.depth);
@@ -92,7 +83,6 @@ function shadowStyle() {
     return { fontSize: 1, color: TITLE.shadow.color, opacity: TITLE.shadow.opacity };
 }
 
-// The default text material, with pixels dropping out in a 4×4 ordered (Bayer) pattern as `dissolve` goes 0 → 1.
 function ditheredMaterial(dissolve: ReturnType<typeof uniform>) {
     return defineTextMaterial((context) => {
         const material = context.createDefaultMaterial();
@@ -110,7 +100,6 @@ function ditheredMaterial(dissolve: ReturnType<typeof uniform>) {
 const forward = new THREE.Vector3();
 const up = new THREE.Vector3();
 
-// Square to the screen and sized to it, so it reads the same on a phone as on a monitor.
 function fitTitle(title: Title, camera: THREE.PerspectiveCamera) {
     const visibleHeight = 2 * title.distance * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2);
     const visibleWidth = visibleHeight * camera.aspect;
@@ -142,7 +131,6 @@ export function updateTitle(title: Title, entering: boolean, camera: THREE.Persp
 
     if (title.group.visible) fitTitle(title, camera);
 
-    // A slow sway while the title screen is up, gone as you click in.
     const sway = 1 - title.settle;
     if (sway <= 0) return;
     const t = title.time * SWAY.speed * Math.PI * 2;

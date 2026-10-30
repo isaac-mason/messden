@@ -6,18 +6,13 @@ import { GRAVITY, type Physics } from './physics';
 
 const PLAYER = { height: 1.7, radius: 0.25, eye: 1.6, walk: 1.6, run: 3.2, jump: 3.6, accel: 10, friction: 8 };
 const CROUCH = { height: 1.0, eye: 0.9, speed: 0.8, eyeSeconds: 0.12 };
-// Standing back up is refused if it would push into anything deeper than this.
 const STAND_UP_TOLERANCE = 0.01;
 const MAX_SLOPE = (50 * Math.PI) / 180;
-// Floorboard lips and rugs, not counters or crates.
 const STEP_UP = 0.12;
 const LOOK_SENSITIVITY = 0.0022;
-// Opt-in damped look: the view settles onto where the mouse aims.
 const SMOOTH_LOOK_SECONDS = 0.06;
 const ZOOM = { fov: 70, zoomedFov: 38, seconds: 0.12 };
-// Head lowest as each foot lands; a dip on landing a jump, by how fast you came down.
 const BOB = { stride: 0.75, height: 0.022, seconds: 0.15, landPerSpeed: 0.018, landMax: 0.09, landSeconds: 0.12 };
-// Shorter than this off the ground is the collider's bumps, not a fall worth landing from.
 const MIN_AIR_SECONDS = 0.15;
 
 const SPAWN: Vec3 = [-0.65, 0.02, 0.11];
@@ -100,7 +95,6 @@ export function updatePlayer(player: Player, physics: Physics, input: Input, dt:
     const [lookX, lookY] = consumeLook(input);
     const fovGoal = input.zoom ? ZOOM.zoomedFov : ZOOM.fov;
     player.fov += (fovGoal - player.fov) * (1 - 0.5 ** (dt / ZOOM.seconds));
-    // Slower look when zoomed, so the view moves the same on screen.
     const sensitivity = LOOK_SENSITIVITY * (player.fov / ZOOM.fov);
     player.aimYaw -= lookX * sensitivity;
     player.aimPitch = THREE.MathUtils.clamp(player.aimPitch - lookY * sensitivity, -1.5, 1.5);

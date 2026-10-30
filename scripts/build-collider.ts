@@ -47,7 +47,6 @@ function flatten({ positions, indices }: Mesh): number[] {
     const triangleCount = indices.length / 3;
     const minUp = Math.cos(FLAT.maxTilt);
     const area = new Map<number, number>();
-    // Area-weighted sum of each vertex's face normals.
     const vertexNormals = new Float32Array(vertexCount * 3);
 
     for (let t = 0; t < triangleCount; t++) {
@@ -63,8 +62,6 @@ function flatten({ positions, indices }: Mesh): number[] {
         area.set(bin, (area.get(bin) ?? 0) + length / 2);
     }
 
-    // A level is a local peak of flat area by height, big enough to be a real surface.
-    // Peaks closer than minLevelGap are one lumpy surface: keep the bigger.
     const peaks: [number, number][] = [];
     for (const [bin, a] of area) {
         if (a < FLAT.minLevelArea) continue;
@@ -79,7 +76,6 @@ function flatten({ positions, indices }: Mesh): number[] {
         }
     }
 
-    // Only vertices facing up on the whole: where a floor meets a wall, the average leans and it stays put.
     const minVertexUp = Math.cos(FLAT.maxVertexTilt);
     for (let v = 0; v < vertexCount; v++) {
         const [nx, ny, nz] = [vertexNormals[v * 3], vertexNormals[v * 3 + 1], vertexNormals[v * 3 + 2]];

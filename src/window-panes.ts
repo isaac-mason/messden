@@ -2,17 +2,12 @@
 // either side of the glass to cut (the capture's glass is a fuzzy layer, and nothing it saw outside is worth keeping).
 export type Pane = { corner: number[]; across: number[]; up: number[]; front: number; back: number };
 
-// Near the sill, cut less into the room: plants and clutter sit there.
 export const SILL = { height: 0.25, front: 0.15 };
 
-// Horizontal, out of the room.
 export const OUT = [-0.285, 0, -0.959];
-// Past the measured edges, to catch the glass's fuzzy rim.
 export const MARGIN = 0.08;
-// Further out, over the frame and wall, only the glass's blue bleed: the frame is dark and warm.
 export const EDGE = { reach: 0.22, front: 0.5, back: 1.5, blueness: 0.08, minBlue: 0.18, paleLight: 0.3, glare: 0.5 };
 
-// Past the wall the window's in, along its whole width: nothing out there belongs to the room.
 export const WALL = { origin: [-5.812, 0, -5.385], along: [0.959, 0, -0.285], from: -1.5, to: 5.5, beyond: 0.3 };
 
 export const PANES: Pane[] = [
@@ -34,7 +29,6 @@ export function insidePane(pane: Pane, point: number[]): boolean {
     return out <= pane.back && out >= -front;
 }
 
-// How much bluer than red (and than most of its green) a colour is.
 export function blueness([r, g, b]: number[]): number {
     return b - Math.max(r, g * 0.6);
 }
@@ -69,7 +63,6 @@ export function cutsSplat(point: number[], colour: number[]): boolean {
     return isGlassColour(colour) && PANES.some((pane) => nearPane(pane, point));
 }
 
-// Blue, pale and not warm, or near white: the glass's bleed, never the dark wood or the firelight.
 export function isGlassColour(colour: number[]): boolean {
     const [r, g, b] = colour;
     const light = (r + g + b) / 3;
@@ -80,12 +73,10 @@ export function isGlassColour(colour: number[]): boolean {
     );
 }
 
-// One sheet of glass across the whole opening, past every pane's edge: the frame's splats draw over it.
 export const SHEET = { overlap: 0.12, overlapBelow: 0.2 };
 
 export function glassSheet() {
     const into = [-OUT[0], -OUT[1], -OUT[2]];
-    // up × into, so the sheet's x runs along the wall.
     const along = [into[2], 0, -into[0]];
     const origin = PANES[0].corner;
     let [left, right, bottom, top] = [Infinity, -Infinity, Infinity, -Infinity];
@@ -107,9 +98,6 @@ export function glassSheet() {
     return { centre, along, into, width: right - left, height: top - bottom };
 }
 
-// A clean frame over the capture's ragged one: posts between and beside the panes, a sill under each, a head across
-// the top, each just overlapping the glass. Boxes in the wall's terms: from the first pane's corner, along the wall
-// and up, and out of it into the room.
 export const FRAME = { overlap: 0.1, outer: 0.14, depth: 0.12, sill: 0.1, head: 0.14 };
 
 export type FramePiece = { from: number; to: number; bottom: number; top: number };

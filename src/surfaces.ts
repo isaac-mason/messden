@@ -1,11 +1,9 @@
 import * as THREE from 'three';
 
-// What's underfoot where: boxes in the room, each a surface its footsteps sound like. Anywhere else is the floor.
 export type Surface = 'hard' | 'wool';
 
 export const DEFAULT_SURFACE: Surface = 'hard';
 
-// Placed with scripts/look.ts: the bed in the corner under the window, picked round its edges, squared to the walls.
 export const VOLUMES: {
     name: string;
     surface: Surface;
@@ -23,7 +21,6 @@ export function surfaceAt(feet: ArrayLike<number>): Surface {
         const { cos, sin } = TURNS[i];
         const dx = feet[0] - centre[0];
         const dz = feet[2] - centre[2];
-        // Into the box's own axes: undo its turn about y.
         const x = dx * cos - dz * sin;
         const z = dx * sin + dz * cos;
         if (Math.abs(x) <= size[0] / 2 && Math.abs(feet[1] - centre[1]) <= size[1] / 2 && Math.abs(z) <= size[2] / 2)
@@ -32,7 +29,6 @@ export function surfaceAt(feet: ArrayLike<number>): Surface {
     return DEFAULT_SURFACE;
 }
 
-// The volumes as wireframes, for the debug panel.
 export function surfaceVolumes(): THREE.Group {
     const colours: Record<Surface, number> = { hard: 0x9fb3ff, wool: 0xff8fd0 };
     const group = new THREE.Group();

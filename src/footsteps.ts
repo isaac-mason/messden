@@ -7,13 +7,11 @@ const FOOTSTEPS = {
     minGapSeconds: 0.25,
     volume: [0.16, 0.26],
     detuneCents: 140,
-    // Feet don't sound the same: one a touch lower, each a little off to its side.
     footCents: 45,
     footPan: 0.12,
     muffle: [1000, 1900],
     landing: { volume: 0.34, cents: -300, muffle: 800 },
 };
-// How each surface sounds, over the defaults: wool is soft, low and muffled.
 const SURFACES: Record<Surface, { volume: number; cents: number; muffle: number }> = {
     hard: { volume: 1, cents: 0, muffle: 1 },
     wool: { volume: 1.15, cents: -150, muffle: 0.8 },
@@ -51,7 +49,6 @@ export function updateFootsteps(footsteps: Footsteps, stepped: boolean, landed: 
     if (context.currentTime - footsteps.lastAt < FOOTSTEPS.minGapSeconds) return;
     footsteps.lastAt = context.currentTime;
 
-    // Never the same clip twice running.
     footsteps.last = (footsteps.last + 1 + Math.floor(Math.random() * Math.max(clips.length - 1, 1))) % clips.length;
     footsteps.foot = -footsteps.foot;
     const source = context.createBufferSource();

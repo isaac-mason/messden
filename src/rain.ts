@@ -1,44 +1,28 @@
 import * as THREE from 'three';
 
-// Rain on the window, simulated: drops land and stay, merge when they touch, and once heavy enough slide down,
-// stalling and lurching, wiping a trail through the mist, shedding droplets and swallowing what's in their path.
-// Each frame they're stamped into a water map (slope and thickness) and the wiped trails into another, for the glass.
-// Positions and sizes are in metres on the glass, y up.
-
 // Drops are drawn about twice life size: real ones vanish at the distance you see a window from.
-// The wiped trails are soft anyway: a third the resolution, and a third of their upload.
 const MAP = { perMetre: 300, wipedPerMetre: 100 };
 const RAIN = {
-    // Drops landing per square metre per second, and how big.
     hits: 25,
     size: [0.003, 0.01],
-    // Now and then a fat one, heavy enough to run straight away.
     big: { chance: 0.25, size: [0.007, 0.012] },
-    // A landing drop flattens out this much wider for a blink before settling.
     splash: { spread: 0.7, seconds: 0.12 },
     satellites: [0, 3],
     satelliteSize: [0.15, 0.35],
     satelliteReach: [1.5, 3.5],
-    // A safety net: evaporation is what thins them.
     max: 4500,
-    // Radius lost per second, so the smallest go first.
     evaporate: 0.00008,
 };
 const SLIDE = {
-    // Past this radius a drop is heavy enough to go.
     heavy: 0.007,
-    // Chance per second a heavy drop sets off, more the heavier.
     start: 1.4,
     gravity: 3.5,
     drag: 2.5,
-    // Lurches: how often its grip catches, and how hard.
     stall: 2.5,
     wander: 0.007,
-    // Droplets left behind, every so far, at this share of its size.
     trailEvery: 0.021,
     trailSize: [0.2, 0.35],
 };
-// How fast wiped trails mist over again, per second.
 const REFOG = 0.12;
 
 type Drop = {
@@ -66,7 +50,6 @@ export type Rain = {
     wiped: { canvas: HTMLCanvasElement; context: CanvasRenderingContext2D; texture: THREE.CanvasTexture };
     sprite: HTMLCanvasElement;
     owed: number;
-    // Per cell, the first drop in it (an index into drops, or -1); per drop, the next in the same cell.
     grid: { columns: number; rows: number; first: Int32Array; next: Int32Array };
 };
 
@@ -95,7 +78,6 @@ export function initRain(width: number, height: number): Rain {
             next: new Int32Array(RAIN.max * 2),
         },
     };
-    // Start mid-storm rather than on dry glass.
     for (let i = 0; i < 240; i++) updateRain(rain, 0.05);
     return rain;
 }
@@ -104,7 +86,6 @@ export function updateRain(rain: Rain, dt: number): void {
     land(rain, dt);
     slide(rain, dt);
     merge(rain);
-    // Past the cap, the oldest go.
     for (let i = 0; i < rain.drops.length - RAIN.max; i++) rain.drops[i].gone = true;
     if (rain.drops.length > RAIN.max) compact(rain);
     for (const drop of rain.drops) {
@@ -148,7 +129,6 @@ function newDrop(x: number, y: number, r: number): Drop {
     return drop;
 }
 
-// Keeps the drops still here, in order, in place; the rest go to the spares.
 function compact(rain: Rain) {
     const drops = rain.drops;
     let kept = 0;
@@ -167,7 +147,6 @@ function slide(rain: Rain, dt: number) {
             if (drop.r > SLIDE.heavy && Math.random() < SLIDE.start * (drop.r / SLIDE.heavy) * dt) drop.moving = true;
             continue;
         }
-        // Gravity against a grip that catches now and then: it lurches, slows, goes again.
         const grip = Math.sin(drop.age * SLIDE.stall * Math.PI * 2 + drop.wander) > 0.6 ? 6 : 1;
         drop.vy += (SLIDE.gravity * (drop.r / SLIDE.heavy) - drop.vy * SLIDE.drag * grip) * dt;
         const step = Math.max(0, drop.vy) * dt;
@@ -188,7 +167,6 @@ function slide(rain: Rain, dt: number) {
     for (const drop of shedding) rain.drops.push(drop);
 }
 
-// Touching drops become one, keeping their area; a moving drop swallows what it runs into.
 const CELL = RAIN.big.size[1] * 2.5;
 
 function merge(rain: Rain) {
@@ -206,7 +184,6 @@ function merge(rain: Rain) {
     }
     let merged = false;
     for (const drop of drops) {
-        // Still drops only meet what lands on them or runs into them: start from those.
         if (drop.gone || (!drop.moving && drop.age > 0.05)) continue;
         const column = Math.floor(drop.x / CELL);
         const row = Math.floor(drop.y / CELL);
@@ -240,7 +217,6 @@ function draw(rain: Rain, dt: number) {
     const scale = MAP.perMetre;
     const h = water.canvas.height;
     water.context.clearRect(0, 0, water.canvas.width, h);
-    // Trails mist over again; moving drops wipe them clear.
     wiped.context.globalCompositeOperation = 'destination-out';
     wiped.context.fillStyle = `rgba(0, 0, 0, ${Math.min(1, REFOG * dt)})`;
     wiped.context.fillRect(0, 0, wiped.canvas.width, wiped.canvas.height);
@@ -251,7 +227,6 @@ function draw(rain: Rain, dt: number) {
         const r = drop.r * (1 + RAIN.splash.spread * splash) * scale;
         const x = drop.x * scale;
         const y = h - drop.y * scale;
-        // A little taller than wide when sliding, heavier at the bottom.
         const tall = drop.moving ? 1.25 : 1;
         water.context.drawImage(sprite, x - r, y - r * tall, r * 2, r * 2 * tall);
         if (drop.moving) {
@@ -265,8 +240,6 @@ function draw(rain: Rain, dt: number) {
     wiped.texture.needsUpdate = true;
 }
 
-// One drop, as the glass reads it: red and green its slope across and up (0.5 flat), blue its thickness, alpha its
-// coverage with a soft edge.
 function dropSprite(size: number): HTMLCanvasElement {
     const canvas = document.createElement('canvas');
     canvas.width = canvas.height = size;

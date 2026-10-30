@@ -2,10 +2,7 @@ import type { SplatRenderer } from 'spark-radix';
 import * as THREE from 'three';
 import { type Physics, rayDistance } from './physics';
 
-// Splat-level depth of field: each splat widens by its circle of confusion, opacity spread to match.
-// Off once you're in: the rain and the city carry the softness here.
 const APERTURE_TAN = 0;
-// The title screen's dreamy focus, eased away on entering.
 const TITLE_APERTURE_TAN = 0.0096;
 const RELEASE_SECONDS = 0.5;
 const PULL_SECONDS = 0.1;
