@@ -4,13 +4,9 @@ import { MeshStandardNodeMaterial, RenderTarget, type WebGPURenderer } from 'thr
 
 const { mix, screenUV, vec3 } = TSL;
 
-// A low-poly calico sitting on the asphalt in big headphones, eyes shut, vibing to an iPod lying beside it: its own
-// little scene, filmed into a small portrait target each frame for a billboard in the city to show.
-
 export const CAT_VIDEO = { width: 216, height: 280 };
 const BPM = 96;
 const COLOURS = {
-    // A calico: white, with patches of orange and black.
     fur: 0xf7f1ea,
     orange: 0xf08a3a,
     black: 0x2b2428,
@@ -32,18 +28,18 @@ export type CatVideo = {
     head: THREE.Group;
     body: THREE.Group;
     tail: THREE.Group;
+    profile: THREE.PerspectiveCamera;
+    profileTarget: RenderTarget;
 };
 
 export function initCatVideo(): CatVideo {
     const scene = new THREE.Scene();
     scene.backgroundNode = mix(vec3(0.3, 0.3, 0.33), vec3(0.5, 0.5, 0.53), screenUV.y.oneMinus());
     const camera = new THREE.PerspectiveCamera(34, CAT_VIDEO.width / CAT_VIDEO.height, 0.1, 50);
-    // A little to its left and above, the whole cat and the iPod in frame.
     camera.position.set(-1.7, 1.9, 6);
     camera.lookAt(-0.1, 1.15, 0.2);
     const target = new RenderTarget(CAT_VIDEO.width, CAT_VIDEO.height, { type: THREE.HalfFloatType });
 
-    // Faceted on purpose: flat shading, few faces.
     const shape = (
         geometry: THREE.BufferGeometry,
         colour: number,
@@ -66,7 +62,6 @@ export function initCatVideo(): CatVideo {
     ground.rotation.x = -Math.PI / 2;
     scene.add(ground);
 
-    // Sitting up: an egg of a body, haunches behind, a white chest, two white front paws.
     const body = new THREE.Group();
     body.add(
         shape(new THREE.IcosahedronGeometry(1, 1), COLOURS.fur, [0, 0.82, 0], [0.62, 0.84, 0.58]),
@@ -76,10 +71,8 @@ export function initCatVideo(): CatVideo {
         shape(new THREE.IcosahedronGeometry(0.14, 1), COLOURS.fur, [-0.16, 0.1, 0.46], [1, 0.8, 1.3]),
         shape(new THREE.IcosahedronGeometry(0.14, 1), COLOURS.fur, [0.16, 0.1, 0.46], [1, 0.8, 1.3]),
     );
-    // The tail, curled round its feet along the ground.
     const tail = new THREE.Group();
     tail.position.set(0.55, 0.12, -0.2);
-    // Many overlapping pieces, so it reads as one curl, banded orange and black.
     for (let i = 0; i < 14; i++) {
         const along = i / 13;
         const angle = along * Math.PI * 0.8;
@@ -89,13 +82,10 @@ export function initCatVideo(): CatVideo {
     }
     body.add(tail);
 
-    // The head pivots at the neck, so it nods.
     const head = new THREE.Group();
     head.position.set(0, 1.62, 0.12);
-    // A big head on a small body reads as a kitten.
     head.scale.setScalar(1.25);
     const ear = (side: number, colour: number) => {
-        // Up and forward, standing in front of the headphone band rather than hidden under it.
         const outer = shape(new THREE.ConeGeometry(0.26, 0.44, 5), colour, [side * 0.36, 0.7, 0.16]);
         outer.rotation.set(0.25, 0, side * -0.32);
         const inner = shape(new THREE.ConeGeometry(0.15, 0.27, 5), COLOURS.inner, [side * 0.35, 0.67, 0.27]);
@@ -112,7 +102,6 @@ export function initCatVideo(): CatVideo {
         ...ear(-1, COLOURS.orange),
         ...ear(1, COLOURS.black),
     );
-    // Eyes shut, content: two little downward curves, rosy cheeks, whiskers.
     for (const side of [-1, 1]) {
         const eye = shape(new THREE.TorusGeometry(0.085, 0.018, 4, 10, Math.PI), COLOURS.closedEye, [side * 0.22, 0.17, 0.53]);
         eye.rotation.z = Math.PI;
@@ -128,7 +117,6 @@ export function initCatVideo(): CatVideo {
             head.add(whisker);
         }
     }
-    // Big white headphones.
     head.add(shape(new THREE.TorusGeometry(0.74, 0.07, 5, 14, Math.PI), COLOURS.headphones, [0, 0.17, 0]));
     for (const side of [-1, 1]) {
         const cup = shape(new THREE.CylinderGeometry(0.24, 0.24, 0.2, 10), COLOURS.headphones, [side * 0.72, 0.1, 0]);
@@ -138,7 +126,6 @@ export function initCatVideo(): CatVideo {
     body.add(head);
     scene.add(body);
 
-    // The iPod, lying on the asphalt beside it, its cable running up to the headphones.
     const ipod = new THREE.Group();
     ipod.position.set(-0.55, 0.04, 1.05);
     ipod.rotation.set(-Math.PI / 2, 0, 0.5);
@@ -157,18 +144,19 @@ export function initCatVideo(): CatVideo {
     ]);
     scene.add(shape(new THREE.TubeGeometry(cable, 40, 0.015, 4), COLOURS.headphones, [0, 0, 0]));
 
-    // Overcast daylight, as in the street.
     const sun = new THREE.DirectionalLight(0xffffff, 2.2);
     sun.position.set(-2, 4, 3);
-    // A soft fill from the front, and light bouncing up off the asphalt, so no side goes black.
     const fill = new THREE.DirectionalLight(0xfff4ea, 1.1);
     fill.position.set(0.5, 1.2, 5);
     scene.add(sun, fill, new THREE.HemisphereLight(0xe6eaf4, 0x8a8690, 1.6));
 
-    return { scene, camera, target, head, body, tail };
+    const profile = new THREE.PerspectiveCamera(30, 16 / 9, 0.1, 50);
+    profile.position.set(4.2, 1.75, 1.6);
+    profile.lookAt(0, 1.45, 0.2);
+    const profileTarget = new RenderTarget(320, 180, { type: THREE.HalfFloatType });
+    return { scene, camera, target, head, body, tail, profile, profileTarget };
 }
 
-// Vibing: a soft nod on each beat, a slow sway, a little rock of the body, the tail's tip twitching.
 export function poseCat(video: CatVideo, seconds: number): void {
     const beats = seconds * (BPM / 60);
     const nod = (1 - (beats % 1)) ** 2;
@@ -183,5 +171,7 @@ export function renderCatVideo(video: CatVideo, renderer: WebGPURenderer, second
     poseCat(video, seconds);
     renderer.setRenderTarget(video.target);
     renderer.render(video.scene, video.camera);
+    renderer.setRenderTarget(video.profileTarget);
+    renderer.render(video.scene, video.profile);
     renderer.setRenderTarget(null);
 }

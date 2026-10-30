@@ -2,7 +2,9 @@ import { TSL, type TslNode } from 'spark-radix';
 import * as THREE from 'three';
 import { MeshBasicNodeMaterial, RenderTarget, type WebGPURenderer } from 'three/webgpu';
 import catjamUrl from '../assets/ads/catjam.png?url';
+import { type Ads, initAds, updateAds } from './ads';
 import { type CatVideo, initCatVideo, renderCatVideo } from './cat';
+import { type Frost, initFrost, renderFrost, resizeFrost } from './frost';
 import { glassSheet, OUT } from './window-panes';
 
 const {
@@ -32,26 +34,34 @@ const {
     step,
     texture,
     time,
-    uniform,
     uv,
     vec2,
     vec3,
 } = TSL;
 
-// The city outside: real geometry, drawn each frame from the player's camera into a target the glass shows.
-// The den is high up a tower, so the streets are well below the window.
-// Everything's placed in the window's own frame: x along the wall, z out of it, y up from the window's middle.
-
 const STREET = -70;
-// Half the screen's resolution: the glass blurs it anyway.
 export const CITY_SCALE = 0.75;
 
+const STREETS = {
+    avenueEvery: 4,
+    crossEvery: 5,
+    road: 9,
+    pavement: 3.5,
+    lampEvery: 22,
+    cars: 1600,
+    carSpeed: [9, 17],
+    walkers: 2000,
+    roads: 8,
+    span: 1400,
+    // How far behind the window a lane starts, and how far a car strays from its even spacing (metres).
+    behind: 150,
+    jitter: 10,
+};
+const SHOPS = { height: 5.6, bay: 5, shuttered: 0.3 };
 const TOWERS = { cell: 24, near: 55, far: 820, spread: 1.4, skip: 0.18, width: [9, 20], height: [18, 140], tallFar: 1.8 };
 const SINK = 0.05;
 const TIERS = { chance: 0.55, from: 60, shrink: [0.55, 0.8], height: [0.15, 0.35], spire: 0.22, clutter: 3 };
-// A window bay across, a floor up, in metres; how many are lit; how many flicker.
 const WINDOWS = { width: 1.7, height: 3.4, lit: [0.2, 0.7], flicker: 0.03 };
-// Facades lit from below by the street's glow, fading with height, and a little from the sky.
 const FACADE = { uplight: vec3(0.5, 0.16, 0.2), uplightFade: 70, skylight: vec3(0.05, 0.05, 0.11), occlusion: 1.6 };
 const EDGES = { chance: 0.08, width: 0.25, brightness: 2 };
 const BEACONS = { from: 110, size: 1.3, rate: 1.1 };
@@ -64,21 +74,28 @@ const NEON = [
 ];
 const SIGNS = { chance: 0.32 };
 const ADS = { count: 5, depth: [90, 320] };
-// Billboards of their own on masts, each with a clear view of it from the window: the jamming cat video,
-// catJAM, and three little silly ones.
 const BOARDS = {
-    cat: { x: -18, y: 4, z: 110, width: 10, height: 13 },
-    catjam: { x: 3, y: 4, z: 100, width: 9, height: 9 },
-    worldLabs: { x: -42, y: 36, z: 190, width: 44, height: 5 },
-    noodles: { x: -46, y: 8, z: 100, width: 9, height: 7 },
-    catCafe: { x: -18, y: -6, z: 80, width: 22, height: 3.6 },
-    dumplings: { x: -32, y: 24, z: 150, width: 16, height: 6 },
+    cat: { x: -27.6, y: 1.4, z: 110, width: 18.2, height: 23.4 },
+    catjam: { x: 8.8, y: 1.4, z: 95, width: 15.6, height: 15.6 },
+    worldLabs: { x: -40, y: 82, z: 280, width: 60, height: 7 },
+    noodles: { x: 25.6, y: 37.8, z: 100, width: 11.7, height: 9.1 },
+    catCafe: { x: -18, y: -8, z: 80, width: 26, height: 4.2 },
+    dumplings: { x: 98.4, y: 6.6, z: 140, width: 20.8, height: 7.8 },
+    big: { x: -104.6, y: 11.8, z: 170, width: 39, height: 22.1 },
+    lofi: { x: 56.4, y: 24.8, z: 150, width: 31.2, height: 17.6 },
+    tall: { x: -153.6, y: 32.6, z: 170, width: 18.2, height: 22.1 },
+    centre: { x: -8, y: 35.2, z: 120, width: 26, height: 14.6 },
+    lowRight: { x: 126.4, y: -6.4, z: 200, width: 31.2, height: 17.6 },
+    high: { x: -55.6, y: 79.4, z: 240, width: 31.2, height: 20.8 },
+    nearRight: { x: 42.4, y: -1.2, z: 115, width: 19.5, height: 13 },
+    upperMiddle: { x: 84.4, y: 66.4, z: 230, width: 33.8, height: 19 },
+    lowLeft: { x: -66, y: -10, z: 120, width: 18.2, height: 12.1 },
+    farRight: { x: 154.4, y: 43, z: 220, width: 28.6, height: 16.1 },
+    upperLeft: { x: -83.6, y: 58.6, z: 180, width: 26, height: 14.7 },
 };
-// Where the eye starts, in the city's frame (see player.ts's SPAWN): the boards are placed in view from it, and
-// nothing's built between it and them.
-const START_EYE = { x: 1.32, z: -6.74 };
-// Signs drawn once onto a canvas: emoji, words, a neon glow. Marquees repeat and scroll, at this many repeats per
-// board and this speed (boards per second, the sign's way).
+// The player's spawn (player.ts SPAWN) in the city's frame: towers stay under its sightlines to the boards.
+const START_EYE = { x: 1.32, y: 0, z: -6.74 };
+const CAP_MARGIN = 4;
 const SIGNS_TEXT = {
     worldLabs: { text: '★ THE WORLD LABS ★ NOW IN 3D ★ ', colour: '#ff4fc8', marquee: { repeats: 2, speed: 0.06 } },
     catCafe: { text: '🐈 CAT CAFÉ · MORE CATS THAN CHAIRS · ', colour: '#40e8ff', marquee: { repeats: 2, speed: -0.05 } },
@@ -86,14 +103,12 @@ const SIGNS_TEXT = {
     dumplings: { text: '🥟 DUMPLINGS ARE\nA HUG YOU CAN EAT', colour: '#9dff5a', blink: 0 },
 };
 const CATJAM = { columns: 13, frames: 158, fps: 25 };
-// Streams of traffic far enough out to read as threads of light; closer, the glass frosts them into blobs.
 const TRAFFIC = { cars: 360, lanes: 9, length: 1400, speed: [18, 45], trail: 3.5, depth: [160, 600] };
 const TRAINS = { lines: 3, cars: 9, carLength: 18, length: 2200, speed: [28, 40] };
 const BLIMPS = { count: 2, size: [46, 13], speed: 3 };
 const MEGA = { count: 7, depth: [1350, 1900], height: [380, 900], width: [120, 260] };
 const CLOUDS = { height: 135, scale: 0.0035, drift: 6 };
 const SEARCHLIGHTS = { count: 3, sweep: 0.32, colour: vec3(0.6, 0.75, 1) };
-// Rain falling past the window, close enough to see as streaks.
 const RAIN = {
     drops: 5000,
     x: 30,
@@ -104,9 +119,6 @@ const RAIN = {
     length: 0.9,
     colour: vec3(0.6, 0.65, 0.85).mul(0.22),
 };
-// Distance haze, thicker and warmer low down where the streets glow up through it.
-// Distance haze, clear close by and thickening with distance; warm low down where the streets glow up through it,
-// magenta through the middle, cooler up high.
 const FOG = {
     colour: vec3(0.17, 0.05, 0.17),
     low: vec3(0.36, 0.1, 0.14),
@@ -122,19 +134,20 @@ export type City = {
     scene: THREE.Scene;
     camera: THREE.PerspectiveCamera;
     target: RenderTarget;
-    texel: ReturnType<typeof uniform>;
     cat: CatVideo;
+    ads: Ads;
+    frost: Frost;
 };
 
 export function initCity(renderer: WebGPURenderer): City {
     const scene = new THREE.Scene();
     scene.backgroundNode = smogSky();
     const camera = new THREE.PerspectiveCamera(70, 1, 1, 4000);
-    // Mipmapped, so the glass can blur it smoothly by reading a softer level rather than scattering taps.
     const target = new RenderTarget(1, 1, {
         type: THREE.HalfFloatType,
-        generateMipmaps: true,
-        minFilter: THREE.LinearMipmapLinearFilter,
+        // Multisampled: the city's edges and window grids crawl as the view sways without it.
+        samples: 4,
+        depthTexture: new THREE.DepthTexture(1, 1),
     });
 
     const { centre, along } = glassSheet();
@@ -152,6 +165,7 @@ export function initCity(renderer: WebGPURenderer): City {
 
     const towers = layout();
     const cat = initCatVideo();
+    const ads = initAds();
     // A render target's rows run down under WebGPU, up under WebGL.
     const flipped = renderer.coordinateSystem === THREE.WebGPUCoordinateSystem;
     scene.add(
@@ -159,9 +173,12 @@ export function initCity(renderer: WebGPURenderer): City {
         buildings(place, towers),
         beacons(place, towers),
         signs(place, towers),
-        ads(place, towers),
-        billboards(place, cat, flipped),
+        holograms(place, towers),
+        billboards(place, cat, ads, flipped),
         traffic(place),
+        streetTraffic(place),
+        streetLamps(place),
+        walkers(place),
         trains(place),
         blimps(place),
         street(place),
@@ -169,7 +186,7 @@ export function initCity(renderer: WebGPURenderer): City {
         searchlights(place),
         rain(place),
     );
-    return { scene, camera, target, texel: uniform(new THREE.Vector2(1, 1)), cat };
+    return { scene, camera, target, cat, ads, frost: initFrost(target.texture) };
 }
 
 export function resizeCity(city: City, width: number, height: number, pixelRatio: number): void {
@@ -178,11 +195,12 @@ export function resizeCity(city: City, width: number, height: number, pixelRatio
         Math.max(1, Math.round(height * pixelRatio * CITY_SCALE)),
     ];
     city.target.setSize(w, h);
-    (city.texel.value as THREE.Vector2).set(1 / w, 1 / h);
+    resizeFrost(city.frost, w, h);
 }
 
 export function renderCity(city: City, renderer: WebGPURenderer, view: THREE.PerspectiveCamera): void {
     renderCatVideo(city.cat, renderer, performance.now() / 1000);
+    updateAds(city.ads, performance.now() / 1000);
     city.camera.position.copy(view.position);
     city.camera.quaternion.copy(view.quaternion);
     city.camera.fov = view.fov;
@@ -190,11 +208,12 @@ export function renderCity(city: City, renderer: WebGPURenderer, view: THREE.Per
     city.camera.updateProjectionMatrix();
     renderer.setRenderTarget(city.target);
     renderer.render(city.scene, city.camera);
-    renderer.setRenderTarget(null);
+    renderFrost(city.frost, renderer);
 }
 
 export function renderCityOnly(city: City, renderer: WebGPURenderer, view: THREE.PerspectiveCamera): void {
     renderCatVideo(city.cat, renderer, performance.now() / 1000);
+    updateAds(city.ads, performance.now() / 1000);
     city.camera.position.copy(view.position);
     city.camera.quaternion.copy(view.quaternion);
     city.camera.fov = view.fov;
@@ -207,8 +226,7 @@ export function renderCityOnly(city: City, renderer: WebGPURenderer, view: THREE
 
 type At = (x: number, y: number, z: number) => THREE.Vector3;
 type Place = { at: At; facing: THREE.Quaternion; frame: { origin: THREE.Vector3; x: THREE.Vector3; z: THREE.Vector3 } };
-type Tower = { x: number; z: number; width: number; depth: number; height: number; seed: number };
-// One box of a tower: its footprint's middle, its size, and how high its base sits.
+type Tower = { x: number; z: number; width: number; depth: number; height: number; seed: number; capped: boolean };
 type Block = { x: number; z: number; base: number; width: number; depth: number; height: number; seed: number };
 
 function random(seed: number): number {
@@ -216,44 +234,74 @@ function random(seed: number): number {
     return x - Math.floor(x);
 }
 
+const isAvenue = (column: number) => column % STREETS.avenueEvery === 0;
+const isCrossStreet = (row: number) => row % STREETS.crossEvery === 0;
+const avenueXs = (reach: number) => {
+    const xs: number[] = [];
+    for (let column = -Math.ceil(reach / TOWERS.cell); column <= reach / TOWERS.cell; column++)
+        if (isAvenue(column)) xs.push(column * TOWERS.cell);
+    return xs;
+};
+const crossStreetZs = () => {
+    const zs: number[] = [];
+    for (let row = 0, z = TOWERS.near; z < TOWERS.far; row++, z += TOWERS.cell) if (isCrossStreet(row)) zs.push(z);
+    return zs;
+};
+
 function layout(): Tower[] {
     const towers: Tower[] = [];
     let seed = 1;
-    for (let z = TOWERS.near; z < TOWERS.far; z += TOWERS.cell) {
-        const reach = z * TOWERS.spread + 60;
-        for (let x = -reach; x < reach; x += TOWERS.cell) {
+    for (let row = 0, z = TOWERS.near; z < TOWERS.far; row++, z += TOWERS.cell) {
+        const reach = Math.ceil((z * TOWERS.spread + 60) / TOWERS.cell);
+        for (let column = -reach; column <= reach; column++) {
+            const x = column * TOWERS.cell;
             seed++;
+            if (isAvenue(column) || isCrossStreet(row)) continue;
             if (random(seed) < TOWERS.skip) continue;
-            // Nothing between the window and a billboard.
-            const blocking = Object.values(BOARDS).some((b) => {
+            let cap = Number.POSITIVE_INFINITY;
+            for (const b of Object.values(BOARDS)) {
+                if (z > b.z + 15) continue;
                 const reach = (z - START_EYE.z) / (b.z - START_EYE.z);
                 const onLine = START_EYE.x + (b.x - START_EYE.x) * reach;
-                return z < b.z + 15 && Math.abs(x - onLine) < (b.width / 2) * reach + TOWERS.width[1];
-            });
-            if (blocking) continue;
+                if (Math.abs(x - onLine) >= (b.width / 2) * reach + TOWERS.width[1]) continue;
+                const bottom = b.y - b.height / 2 - 1;
+                for (const side of [z - TOWERS.width[1] / 2, z + TOWERS.width[1] / 2]) {
+                    const along = Math.min(1, (side - START_EYE.z) / (b.z - START_EYE.z));
+                    cap = Math.min(cap, START_EYE.y + (bottom - START_EYE.y) * along - STREET - CAP_MARGIN);
+                }
+            }
+            if (cap < TOWERS.height[0] / 2) continue;
             const width = THREE.MathUtils.lerp(TOWERS.width[0], TOWERS.width[1], random(seed * 3.1));
             const depth = THREE.MathUtils.lerp(TOWERS.width[0], TOWERS.width[1], random(seed * 5.7));
-            // Mostly mid-rise, a few very tall, the far ones taller so the skyline rises away.
             const tall = random(seed * 7.3) ** 2.4;
-            const height =
-                THREE.MathUtils.lerp(TOWERS.height[0], TOWERS.height[1], tall) * (1 + (z / TOWERS.far) * (TOWERS.tallFar - 1));
+            const height = Math.min(
+                cap,
+                THREE.MathUtils.lerp(TOWERS.height[0], TOWERS.height[1], tall) * (1 + (z / TOWERS.far) * (TOWERS.tallFar - 1)),
+            );
             const jitter = (TOWERS.cell - width) * (random(seed * 9.9) - 0.5);
-            towers.push({ x: x + jitter, z: z + (random(seed * 2.3) - 0.5) * 6, width, depth, height, seed: random(seed * 1.9) });
+            towers.push({
+                x: x + jitter,
+                z: z + (random(seed * 2.3) - 0.5) * 6,
+                width,
+                depth,
+                height,
+                seed: random(seed * 1.9),
+                capped: cap < Number.POSITIVE_INFINITY,
+            });
         }
     }
     return towers;
 }
 
-// A tower's boxes: its shaft, setback tiers stepping in toward the top, perhaps a spire, and roof clutter.
 function blocksOf(tower: Tower): Block[] {
     const blocks: Block[] = [];
     const r = (k: number) => random(tower.seed * 1000 + k);
     let [width, depth, base] = [tower.width, tower.depth, 0];
     let height = tower.height;
-    const tiered = tower.height > TIERS.from && r(1) < TIERS.chance;
+    const tiered = !tower.capped && tower.height > TIERS.from && r(1) < TIERS.chance;
     if (tiered) height = tower.height * 0.65;
     blocks.push({ x: tower.x, z: tower.z, base, width, depth, height, seed: tower.seed });
-    // Each box above sinks a little into the one below, so no two faces share a plane and fight.
+    // Sunk into the box below so no two faces share a plane and z-fight.
     base += height - SINK;
     if (tiered) {
         for (let tier = 0; tier < 2; tier++) {
@@ -265,7 +313,7 @@ function blocksOf(tower: Tower): Block[] {
             base += rise - SINK;
         }
     }
-    if (r(6) < TIERS.spire) {
+    if (!tower.capped && r(6) < TIERS.spire) {
         const spire = 12 + r(7) * 35;
         blocks.push({ x: tower.x, z: tower.z, base, width: 1.4, depth: 1.4, height: spire, seed: tower.seed });
     }
@@ -291,7 +339,7 @@ function topOf(tower: Tower): number {
 
 /* the towers */
 
-function buildings({ at, facing }: Place, towers: Tower[]) {
+function buildings({ at, facing, frame }: Place, towers: Tower[]) {
     const blocks = towers.flatMap(blocksOf);
     const geometry = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
     const seeds = new Float32Array(blocks.length);
@@ -315,13 +363,12 @@ function buildings({ at, facing }: Place, towers: Tower[]) {
     const seed = attribute('towerSeed', 'float').mul(97.3);
     const size = attribute('blockSize', 'vec3');
     const side = abs(normalWorld.y).lessThan(0.5);
-    // The box's own vertex, before instancing: positionLocal already has each block's placement and scale in it.
+    // positionLocal already includes the instance transform.
     const local = attribute('position', 'vec3').mul(size).toVar();
     const fromSideX = size.x.mul(0.5).sub(abs(local.x));
     const fromSideZ = size.z.mul(0.5).sub(abs(local.z));
     const fromTop = size.y.sub(local.y);
 
-    // Windows, in metres across each face and up: a bay grid, mullions and floor slabs between.
     const across = positionWorld.x.mul(normalWorld.z).sub(positionWorld.z.mul(normalWorld.x));
     const grid = vec2(across.div(WINDOWS.width), positionWorld.y.div(WINDOWS.height));
     const cell = floor(grid);
@@ -330,9 +377,7 @@ function buildings({ at, facing }: Place, towers: Tower[]) {
         .mul(smoothstep(0.94, 0.9, inside.x))
         .mul(smoothstep(0.16, 0.2, inside.y))
         .mul(smoothstep(0.9, 0.86, inside.y));
-    // Offices light a whole floor; homes window by window. Some floors are dark either way.
     const offices = hash(seed.add(4.2)).lessThan(0.35);
-    // Offices light in runs of bays, a floor at a time, with gaps where the lights are off.
     const run = floor(cell.x.div(4));
     const unit = select(offices, vec2(run, cell.y), cell);
     const roll = hash(unit.x.mul(13.7).add(unit.y.mul(71.3)).add(seed.mul(101)));
@@ -342,8 +387,6 @@ function buildings({ at, facing }: Place, towers: Tower[]) {
     const on = step(roll, occupancy)
         .mul(float(1).sub(darkFloor))
         .mul(select(flickering, step(0, sin(time.mul(hash(roll).mul(9).add(2)).add(roll.mul(40)))), float(1)));
-    // What's inside: offices cool white strip-lit, homes warm, now and then a TV's blue or a neon sign's glow;
-    // brighter toward the ceiling, some with blinds, some half-curtained.
     const tone = hash(roll.mul(31.7));
     const warm = mix(vec3(1, 0.62, 0.32), vec3(1, 0.78, 0.5), hash(roll.mul(7.7)));
     const cool = vec3(0.75, 0.97, 0.92);
@@ -354,11 +397,8 @@ function buildings({ at, facing }: Place, towers: Tower[]) {
     const curtain = select(hash(roll.mul(5.9)).lessThan(0.2), smoothstep(0.45, 0.55, inside.x).mul(0.8).add(0.2), float(1));
     const brightness = select(offices, mix(1.1, 1.8, hash(roll.mul(5.1))), mix(0.7, 2, hash(roll.mul(5.1))));
     const light = tint.mul(brightness).mul(ceiling).mul(blinds).mul(curtain);
-    // Unlit glass isn't black: it mirrors the city's glow.
     const glass = mix(vec3(0.03, 0.02, 0.06), FOG.colour.mul(0.35), smoothstep(-0.2, 0.6, inside.y));
 
-    // The wall: its own dark material, lit from the street below and the sky above, darker into its corners, with
-    // panel seams and wet streaks so it isn't a flat slab.
     const material3 = hash(seed.mul(1.7));
     const base = select(
         material3.lessThan(0.4),
@@ -388,9 +428,6 @@ function buildings({ at, facing }: Place, towers: Tower[]) {
     const lit = mix(facade, mix(wall, light, occupancy.mul(0.4)), tiny);
     const roof = base.mul(0.8).add(FACADE.skylight.mul(0.6));
 
-    // Neon strips up the corners and round the top of some towers: the outlined skyline.
-    // Never thinner than about a pixel, and dimmer as they would be: a strip far off is a faint steady line, not one
-    // flickering on and off as the view sways.
     const strip = (distance: TslNode) => {
         const pixel = fwidth(distance);
         const width = max(float(EDGES.width), pixel);
@@ -403,11 +440,32 @@ function buildings({ at, facing }: Place, towers: Tower[]) {
         .mul(smoothstep(0, 6, fromTop));
     const edgeColour = neonPick(hash(seed.add(11.3))).mul(EDGES.brightness);
 
-    material.colorNode = fogged(mix(select(side, lit, roof), edgeColour, outlined));
+    const aboveStreet = positionWorld.y.sub(frame.origin.y + STREET);
+    const bay = floor(across.div(SHOPS.bay));
+    const inBay = fract(across.div(SHOPS.bay));
+    const open = step(SHOPS.shuttered, hash(bay.mul(3.3).add(seed.mul(5.1))));
+    const glassPane = smoothstep(0.06, 0.1, inBay)
+        .mul(smoothstep(0.94, 0.9, inBay))
+        .mul(step(0.4, aboveStreet))
+        .mul(step(aboveStreet, 4.2));
+    const shopLight = mix(vec3(1, 0.78, 0.5), neonPick(hash(bay.add(seed))), step(0.6, hash(bay.mul(7.7).add(seed)))).mul(1.6);
+    const shutter = vec3(0.05, 0.045, 0.05).mul(
+        step(0.5, fract(aboveStreet.mul(4)))
+            .mul(0.4)
+            .add(0.8),
+    );
+    const shopfront = mix(vec3(0.02, 0.018, 0.022), mix(shutter, shopLight, open), glassPane);
+    const sign = step(4.6, aboveStreet)
+        .mul(step(aboveStreet, 5.3))
+        .mul(step(0.35, hash(bay.mul(1.3).add(seed.mul(2.2)))));
+    const shops = mix(shopfront, neonPick(hash(bay.mul(9.1).add(seed))).mul(2.4), sign);
+    const atStreet = step(aboveStreet, SHOPS.height).mul(select(side, float(1), float(0)));
+    const withShops = mix(mix(select(side, lit, roof), edgeColour, outlined), shops, atStreet);
+
+    material.colorNode = fogged(withShops);
     return mesh;
 }
 
-// Red lights blinking on the tallest tops, out of step with each other.
 function beacons({ at, facing }: Place, towers: Tower[]) {
     const tall = towers.filter((t) => topOf(t) > BEACONS.from);
     const mesh = new THREE.InstancedMesh(
@@ -451,7 +509,6 @@ function signs({ at, facing }: Place, towers: Tower[]) {
               : [9 + random(i) * 6, 2.4];
         const y = STREET + Math.min(tower.height - h, 12 + random(i * 2.9) * (tower.height - 12));
         const x = tower.x + (random(i * 6.1) - 0.5) * (tower.width - w);
-        // On the face toward the window, just proud of it.
         matrix.compose(at(x, y + h / 2, tower.z - tower.depth / 2 - 0.4), facing, new THREE.Vector3(w, h, 1));
         mesh.setMatrixAt(i, matrix);
         colours.set(NEON[Math.floor(random(i * 3.3) * NEON.length)], i * 3);
@@ -461,7 +518,6 @@ function signs({ at, facing }: Place, towers: Tower[]) {
     const colour = attribute('signColour', 'vec3');
     const seed = float(instanceIndex).mul(3.7);
     const st = uv();
-    // Blocky glyphs in rows, a bright border, and now and then a stutter.
     const glyph = step(
         0.45,
         hash(
@@ -482,8 +538,7 @@ function signs({ at, facing }: Place, towers: Tower[]) {
     return mesh;
 }
 
-// A few huge animated billboards: falling glyph columns, pulsing rings, or diagonal colour wipes.
-function ads({ at, facing }: Place, towers: Tower[]) {
+function holograms({ at, facing }: Place, towers: Tower[]) {
     const candidates = towers
         .filter((t) => t.z > ADS.depth[0] && t.z < ADS.depth[1] && Math.abs(t.x) < t.z * 0.7 && t.height > 50)
         .sort((a, b) => random(a.seed * 77) - random(b.seed * 77))
@@ -506,7 +561,6 @@ function ads({ at, facing }: Place, towers: Tower[]) {
     const a = neonPick(hash(seed.mul(1.3)));
     const b = neonPick(hash(seed.mul(2.9)));
 
-    // Glyph rain: columns of blocky characters falling at their own speeds, bright at the head.
     const column = floor(st.x.mul(16));
     const fall = st.y.add(time.mul(mix(0.15, 0.45, hash(column.add(seed.mul(9))))));
     const row = floor(fall.mul(28));
@@ -522,7 +576,6 @@ function ads({ at, facing }: Place, towers: Tower[]) {
     )
         .mul(pow(head, 3))
         .mul(step(0.15, fract(st.x.mul(16))));
-    // Rings: pulsing out from the middle.
     const radius = vec2(st.x.sub(0.5), st.y.sub(0.5).mul(1.6)).length();
     const rings = pow(
         sin(radius.mul(28).sub(time.mul(3)))
@@ -530,7 +583,6 @@ function ads({ at, facing }: Place, towers: Tower[]) {
             .add(0.5),
         4,
     ).mul(smoothstep(0.6, 0.1, radius));
-    // Wipes: diagonal colour bands sliding across.
     const wipe = fract(st.x.add(st.y).mul(1.5).sub(time.mul(0.25)));
     const pattern = select(kind.lessThan(1), glyphs, select(kind.lessThan(2), rings, smoothstep(0.4, 0.5, wipe)));
     const colour = mix(a, b, select(kind.lessThan(2), st.y, wipe));
@@ -542,7 +594,6 @@ function ads({ at, facing }: Place, towers: Tower[]) {
 
 /* moving things */
 
-// Cars as light trails: brightest at the front, fading back along their length.
 function traffic({ at, frame }: Place) {
     const geometry = new THREE.BoxGeometry(TRAFFIC.trail, 0.22, 0.5);
     const material = new MeshBasicNodeMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending });
@@ -565,7 +616,6 @@ function traffic({ at, frame }: Place) {
         .add(vec3(...frame.x.toArray()).mul(along))
         .add(vec3(...frame.z.toArray()).mul(depth))
         .add(vec3(0, height, 0));
-    // The box runs along x: flip it so its front leads.
     const oriented = vec3(positionLocal.x.mul(direction), positionLocal.y, positionLocal.z);
     material.positionNode = vec3(...frame.x.toArray())
         .mul(oriented.x)
@@ -578,7 +628,6 @@ function traffic({ at, frame }: Place) {
     return mesh;
 }
 
-// Elevated trains: chains of lit carriages on their tracks, crossing the middle distance.
 function trains({ at, frame, facing }: Place) {
     const group = new THREE.Group();
     const lines = Array.from({ length: TRAINS.lines }, (_, i) => ({
@@ -590,7 +639,6 @@ function trains({ at, frame, facing }: Place) {
 
     const count = TRAINS.lines * TRAINS.cars;
     const geometry = new THREE.BoxGeometry(TRAINS.carLength, 3.6, 3.4);
-    // Per carriage: its line's height, depth, velocity and phase, and which carriage it is.
     const line = new Float32Array(count * 4);
     const place = new Float32Array(count);
     for (let i = 0; i < count; i++) {
@@ -620,7 +668,6 @@ function trains({ at, frame, facing }: Place) {
         .add(vec3(0, positionLocal.y.add(params.x), 0))
         .add(z.mul(positionLocal.z.add(params.y)))
         .add(vec3(...at(0, 0, 0).toArray()));
-    // A band of lit windows along each side, the roof and ends dark.
     const band = step(-0.2, positionLocal.y)
         .mul(step(positionLocal.y, 1.1))
         .mul(step(0.5, fract(positionLocal.x.div(2.2))));
@@ -628,7 +675,6 @@ function trains({ at, frame, facing }: Place) {
     material.colorNode = fogged(mix(vec3(0.02, 0.02, 0.03), vec3(0.95, 0.85, 0.65).mul(1.8), select(sideFace, band, float(0))));
     group.add(mesh);
 
-    // The tracks: long dark beams under each line, with a row of small lamps.
     const beamMaterial = new MeshBasicNodeMaterial();
     const lamp = step(0.97, fract(positionWorld.x.add(positionWorld.z).div(12)));
     beamMaterial.colorNode = fogged(mix(vec3(0.015, 0.012, 0.02), vec3(1, 0.6, 0.3).mul(2), lamp));
@@ -662,7 +708,6 @@ function blimps({ at, facing }: Place) {
         banner.colorNode = fogged(vec3(...NEON[(i * 2 + 1) % NEON.length]).mul(letters.mul(2.6).add(0.15)));
         const board = new THREE.Mesh(new THREE.PlaneGeometry(BLIMPS.size[0] * 0.6, BLIMPS.size[1] * 0.45), banner);
         board.position.set(0, 0, BLIMPS.size[1] / 2 + 0.3);
-        // Drifting slowly along the wall, far out: along the blimp's own x, which faces along the wall.
         const drift = fract(time.mul(BLIMPS.speed / 1600).add(i * 0.37))
             .sub(0.5)
             .mul(1600);
@@ -679,7 +724,6 @@ function blimps({ at, facing }: Place) {
 
 /* the backdrop */
 
-// Vast dark silhouettes far behind it all, a few lights high up: the scale of the place.
 function megastructure({ at, facing }: Place) {
     const geometry = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
     const material = new MeshBasicNodeMaterial();
@@ -695,28 +739,181 @@ function megastructure({ at, facing }: Place) {
     }
     const cell = floor(vec2(positionWorld.x.add(positionWorld.z).div(9), positionWorld.y.div(14)));
     const lights = step(0.985, hash(cell.x.mul(7.7).add(cell.y.mul(31.1))));
-    // Only lightly fogged, so it stands dark against the glowing haze.
     const distance = positionWorld.sub(cameraPosition).length();
     const haze = float(1).sub(exp(distance.mul(-0.0007)));
     material.colorNode = mix(mix(vec3(0.008, 0.006, 0.015), vec3(1, 0.7, 0.45).mul(1.5), lights), FOG.colour, haze.mul(0.75));
     return mesh;
 }
 
-// Wet asphalt far below: dark, puddled, catching the city's glow, with pools of light under the lamps.
-function street({ at, facing }: Place) {
-    const material = new MeshBasicNodeMaterial();
-    const puddles = smoothstep(0.1, 0.5, mx_noise_float(vec3(positionWorld.xz.mul(0.03), 0)));
-    const lamp = fract(positionWorld.xz.div(24)).sub(0.5).length();
-    const pools = smoothstep(0.3, 0, lamp).mul(0.5);
-    const asphalt = mix(vec3(0.012, 0.01, 0.016), FOG.low.mul(0.45), puddles.mul(0.6));
-    material.colorNode = fogged(asphalt.add(vec3(1, 0.55, 0.28).mul(pools.mul(0.35))));
-    const ground = new THREE.Mesh(new THREE.PlaneGeometry(6000, 6000).rotateX(-Math.PI / 2), material);
-    ground.position.copy(at(0, STREET, 0));
-    ground.quaternion.copy(facing);
-    return ground;
+function cityXZ({ frame }: Place, p: TslNode): TslNode {
+    const from = p.sub(vec3(...frame.origin.toArray()));
+    return vec2(from.dot(vec3(...frame.x.toArray())), from.dot(vec3(...frame.z.toArray())));
 }
 
-// A low deck of cloud over the city, lit from beneath by its glow, with the searchlights' spots on it.
+function roads(at: TslNode) {
+    const avenueSpacing = TOWERS.cell * STREETS.avenueEvery;
+    const crossSpacing = TOWERS.cell * STREETS.crossEvery;
+    const acrossAvenue = abs(at.x.sub(floor(at.x.div(avenueSpacing).add(0.5)).mul(avenueSpacing)));
+    const alongZ = at.y.sub(TOWERS.near);
+    const acrossCross = abs(alongZ.sub(floor(alongZ.div(crossSpacing).add(0.5)).mul(crossSpacing)));
+    return { acrossAvenue, acrossCross };
+}
+
+function street(place: Place) {
+    const material = new MeshBasicNodeMaterial();
+    const at = cityXZ(place, positionWorld).toVar();
+    const { acrossAvenue, acrossCross } = roads(at);
+    const half = STREETS.road / 2;
+    const onRoad = max(step(acrossAvenue, half), step(acrossCross, half));
+    const onPavement = max(step(acrossAvenue, half + STREETS.pavement), step(acrossCross, half + STREETS.pavement)).mul(
+        float(1).sub(onRoad),
+    );
+    const avenueLine = step(acrossAvenue, 0.15)
+        .mul(step(0.5, fract(at.y.div(6))))
+        .mul(step(half, acrossCross));
+    const crossLine = step(acrossCross, 0.15)
+        .mul(step(0.5, fract(at.x.div(6))))
+        .mul(step(half, acrossAvenue));
+    const zebra = step(acrossAvenue, half)
+        .mul(step(acrossCross, half + 3))
+        .mul(step(half, acrossCross))
+        .mul(step(0.5, fract(at.x.div(1.2))));
+    const markings = max(max(avenueLine, crossLine), zebra);
+
+    const puddles = smoothstep(0.1, 0.5, mx_noise_float(vec3(positionWorld.xz.mul(0.03), 0)));
+    const asphalt = mix(vec3(0.012, 0.01, 0.016), FOG.low.mul(0.45), puddles.mul(0.6));
+    const pavement = vec3(0.03, 0.026, 0.032);
+    const lampPhase = abs(fract(max(at.x, at.y).div(STREETS.lampEvery)).sub(0.5));
+    const pool = smoothstep(0.25, 0, lampPhase).mul(
+        smoothstep(half + STREETS.pavement + 2, half - 1, min(acrossAvenue, acrossCross)),
+    );
+    const ground = mix(mix(vec3(0.008, 0.007, 0.01), asphalt, onRoad), pavement, onPavement);
+    const lit = ground.add(vec3(0.9, 0.85, 0.7).mul(markings.mul(0.12))).add(vec3(1, 0.6, 0.3).mul(pool.mul(0.28)));
+    material.colorNode = fogged(lit);
+    const plane = new THREE.Mesh(new THREE.PlaneGeometry(6000, 6000).rotateX(-Math.PI / 2), material);
+    plane.position.copy(place.at(0, STREET, 0));
+    plane.quaternion.copy(place.facing);
+    return plane;
+}
+
+function streetTraffic({ at, frame }: Place) {
+    const geometry = new THREE.BoxGeometry(4.2, 0.6, 1.8);
+    const material = new MeshBasicNodeMaterial();
+    const mesh = new THREE.InstancedMesh(geometry, material, STREETS.cars);
+    const identity = new THREE.Matrix4();
+    for (let i = 0; i < STREETS.cars; i++) mesh.setMatrixAt(i, identity);
+    mesh.frustumCulled = false;
+
+    // Lanes, each at one speed with its cars in their own spaced slots: nothing can catch up and overlap. Each lane
+    // runs from behind the den's tower out into the haze, so the wrap from one end to the other is never seen.
+    const lanes = STREETS.roads * 4;
+    const perLane = Math.floor(STREETS.cars / lanes);
+    const span = STREETS.span;
+    const index = float(instanceIndex);
+    const laneIndex = floor(index.div(perLane));
+    const slot = index.sub(laneIndex.mul(perLane));
+    const avenueSpacing = TOWERS.cell * STREETS.avenueEvery;
+    const crossSpacing = TOWERS.cell * STREETS.crossEvery;
+    const onAvenue = laneIndex.mod(2);
+    const direction = floor(laneIndex.div(2)).mod(2).mul(2).sub(1);
+    const road = floor(laneIndex.div(4)).sub(STREETS.roads / 2);
+    const lane = direction.mul(2.2);
+    const speed = mix(STREETS.carSpeed[0], STREETS.carSpeed[1], hash(laneIndex.mul(4.7)));
+    const jitter = hash(index.mul(5.3))
+        .sub(0.5)
+        .mul(STREETS.jitter / span);
+    const travel = fract(
+        slot
+            .div(perLane)
+            .add(jitter)
+            .add(hash(laneIndex.mul(2.9)))
+            .add(time.mul(speed).mul(direction).div(span)),
+    ).mul(span);
+    const avenueAt = vec2(road.mul(avenueSpacing).add(lane), travel.sub(STREETS.behind));
+    const crossAt = vec2(
+        travel.sub(span / 2),
+        road
+            .add(STREETS.roads / 2)
+            .mul(crossSpacing)
+            .add(TOWERS.near)
+            .add(lane),
+    );
+    const where = mix(crossAt, avenueAt, onAvenue);
+    const x = vec3(...frame.x.toArray());
+    const z = vec3(...frame.z.toArray());
+    const heading = mix(x, z, onAvenue).mul(direction);
+    const sideways = mix(z, x, onAvenue);
+    material.positionNode = heading
+        .mul(positionLocal.x)
+        .add(vec3(0, positionLocal.y.add(0.6), 0))
+        .add(sideways.mul(positionLocal.z))
+        .add(x.mul(where.x))
+        .add(z.mul(where.y))
+        .add(vec3(...at(0, STREET, 0).toArray()));
+    // positionLocal already includes the instance transform.
+    const front = attribute('position', 'vec3').x.div(4.2).add(0.5);
+    const lights = mix(vec3(1, 0.1, 0.06).mul(4), vec3(1, 0.95, 0.85).mul(5), step(0.5, front));
+    const body = vec3(0.02, 0.02, 0.025);
+    const end = step(0.42, abs(front.sub(0.5)));
+    material.colorNode = fogged(mix(body, lights, end));
+    return mesh;
+}
+
+function streetLamps({ at, facing }: Place) {
+    const spots: THREE.Vector3[] = [];
+    const offset = STREETS.road / 2 + STREETS.pavement * 0.6;
+    for (const x of avenueXs(700)) {
+        for (let z = TOWERS.near; z < 620; z += STREETS.lampEvery)
+            for (const side of [-1, 1]) spots.push(at(x + side * offset, STREET + 7, z));
+    }
+    for (const z of crossStreetZs()) {
+        if (z > 620) continue;
+        for (let x = -500; x < 500; x += STREETS.lampEvery)
+            for (const side of [-1, 1]) spots.push(at(x, STREET + 7, z + side * offset));
+    }
+    const material = new MeshBasicNodeMaterial();
+    material.colorNode = fogged(vec3(1, 0.72, 0.42).mul(3));
+    const mesh = new THREE.InstancedMesh(new THREE.BoxGeometry(0.9, 0.35, 0.9), material, spots.length);
+    const matrix = new THREE.Matrix4();
+    for (const [i, spot] of spots.entries()) mesh.setMatrixAt(i, matrix.compose(spot, facing, new THREE.Vector3(1, 1, 1)));
+    return mesh;
+}
+
+function walkers({ at, frame }: Place) {
+    const material = new MeshBasicNodeMaterial();
+    const mesh = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.55, 0.55, 0.12, 8), material, STREETS.walkers);
+    const identity = new THREE.Matrix4();
+    for (let i = 0; i < STREETS.walkers; i++) mesh.setMatrixAt(i, identity);
+    mesh.frustumCulled = false;
+    const seed = float(instanceIndex);
+    const avenueSpacing = TOWERS.cell * STREETS.avenueEvery;
+    const road = floor(hash(seed.mul(1.9)).mul(STREETS.roads)).sub(STREETS.roads / 2);
+    const side = step(0.5, hash(seed.mul(2.9)))
+        .mul(2)
+        .sub(1);
+    const kerb = side.mul(STREETS.road / 2 + STREETS.pavement * 0.5).add(hash(seed.mul(6.1)).sub(0.5).mul(2));
+    const direction = step(0.5, hash(seed.mul(3.7)))
+        .mul(2)
+        .sub(1);
+    const span = 560;
+    const travel = fract(
+        hash(seed.mul(4.3)).add(
+            time
+                .mul(mix(0.8, 1.6, hash(seed.mul(5.9))))
+                .mul(direction)
+                .div(span),
+        ),
+    ).mul(span);
+    const x = vec3(...frame.x.toArray());
+    const z = vec3(...frame.z.toArray());
+    material.positionNode = positionLocal
+        .add(x.mul(road.mul(avenueSpacing).add(kerb)))
+        .add(z.mul(travel.add(TOWERS.near)))
+        .add(vec3(...at(0, STREET + 2, 0).toArray()));
+    material.colorNode = fogged(neonPick(hash(seed.mul(7.3))).mul(2.4));
+    return mesh;
+}
+
 function clouds({ at, facing }: Place) {
     const material = new MeshBasicNodeMaterial({ side: THREE.DoubleSide });
     const p = positionWorld.xz.mul(CLOUDS.scale).add(vec2(time.mul(CLOUDS.drift * CLOUDS.scale), 0));
@@ -739,7 +936,6 @@ function clouds({ at, facing }: Place) {
     return deck;
 }
 
-// Where searchlight `i`'s beam meets the clouds, as it sweeps.
 function searchlightHit(i: number, at: At): TslNode {
     const base = at((i - 1) * 260, STREET, 380 + i * 140);
     const angle = sin(time.mul(0.11 + i * 0.03).add(i * 2.1)).mul(SEARCHLIGHTS.sweep);
@@ -763,7 +959,6 @@ function searchlights({ at }: Place) {
         const base = at((i - 1) * 260, STREET, 380 + i * 140);
         const angle = sin(time.mul(0.11 + i * 0.03).add(i * 2.1)).mul(SEARCHLIGHTS.sweep);
         const lean = cos(time.mul(0.07 + i * 0.02).add(i)).mul(SEARCHLIGHTS.sweep * 0.6);
-        // Tilted by shearing along the height, so the top lands where searchlightHit says.
         const up = positionLocal.y.div(rise);
         material.positionNode = positionLocal.add(vec3(sin(angle), 0, sin(lean)).mul(up.mul(rise)));
         const fade = smoothstep(1, 0.2, up).mul(0.12);
@@ -796,7 +991,6 @@ function rain({ at, frame }: Place) {
         .add(vec3(...frame.x.toArray()).mul(x))
         .add(vec3(...frame.z.toArray()).mul(z))
         .add(vec3(0, y, 0));
-    // Leaning with the wind, like the streaks.
     const lean = vec3(...frame.x.toArray()).mul(positionLocal.y.mul(RAIN.slant));
     material.positionNode = positionLocal.add(lean).add(placed);
     // Added light, so it fades to nothing in the haze rather than to the haze's colour.
@@ -833,16 +1027,13 @@ function smogSky(): TslNode {
 
 type Board = { x: number; y: number; z: number; width: number; height: number };
 
-function billboards(place: Place, cat: CatVideo, flipped: boolean) {
+function billboards(place: Place, cat: CatVideo, ads: Ads, flipped: boolean) {
     const group = new THREE.Group();
     const st = uv();
 
-    // The cat video, straight off its target.
     const videoAt = vec2(st.x, flipped ? st.y.oneMinus() : st.y);
     group.add(board(place, BOARDS.cat, texture(cat.target.texture, videoAt).rgb.mul(1.6)));
 
-    // catJAM: the gif's frames, laid out in a sheet, stepped through at its own rate. Its clear background shows
-    // the board's dark glow behind.
     const sheet = new THREE.TextureLoader().load(catjamUrl);
     sheet.colorSpace = THREE.SRGBColorSpace;
     const frame = floor(time.mul(CATJAM.fps)).mod(CATJAM.frames);
@@ -861,10 +1052,28 @@ function billboards(place: Place, cat: CatVideo, flipped: boolean) {
     for (const name of ['worldLabs', 'catCafe', 'noodles', 'dumplings'] as const) {
         group.add(board(place, BOARDS[name], textSign(BOARDS[name], SIGNS_TEXT[name])));
     }
+
+    for (const name of [
+        'big',
+        'centre',
+        'lowRight',
+        'upperMiddle',
+        'farRight',
+        'upperLeft',
+        'high',
+        'nearRight',
+        'lowLeft',
+        'tall',
+    ] as const) {
+        group.add(board(place, BOARDS[name], texture(ads[name].texture, st).rgb.mul(1.7)));
+    }
+
+    const stream = texture(cat.profileTarget.texture, videoAt).rgb.mul(1.5);
+    const overlay = texture(ads.lofi.texture, st);
+    group.add(board(place, BOARDS.lofi, mix(stream, overlay.rgb.mul(1.8), overlay.a)));
     return group;
 }
 
-// A screen on a mast, facing the window, with a flickering neon border and scanlines over whatever it shows.
 function board({ at, facing }: Place, spot: Board, picture: TslNode) {
     const st = uv();
     const aspect = spot.width / spot.height;
@@ -878,7 +1087,6 @@ function board({ at, facing }: Place, spot: Board, picture: TslNode) {
 
     const group = new THREE.Group();
     const screen = new THREE.Mesh(new THREE.PlaneGeometry(spot.width, spot.height), material);
-    // Local +z faces the window: the backing and mast go behind.
     const backing = new THREE.Mesh(new THREE.BoxGeometry(spot.width + 1, spot.height + 1, 0.8), darkMaterial());
     backing.position.z = -0.5;
     const mastHeight = spot.y - spot.height / 2 - STREET;
@@ -892,8 +1100,7 @@ function board({ at, facing }: Place, spot: Board, picture: TslNode) {
 
 type SignText = { text: string; colour: string; marquee?: { repeats: number; speed: number }; blink?: number };
 
-// A sign painted onto a canvas: its words (and emoji) in Paper Mono with a neon glow, on dark. Repainted once the
-// font's in, since the canvas can't wait for it.
+// Repainted once the font loads: the canvas can't wait for it.
 function textSign(spot: Board, sign: SignText): TslNode {
     const canvas = document.createElement('canvas');
     const repeats = sign.marquee?.repeats ?? 1;
@@ -913,7 +1120,6 @@ function textSign(spot: Board, sign: SignText): TslNode {
         context.textBaseline = 'middle';
         context.fillStyle = sign.colour;
         context.shadowColor = sign.colour;
-        // Fit long single lines to the width.
         const widest = Math.max(...lines.map((line) => context.measureText(line).width));
         const squeeze = Math.min(1, (canvas.width * 0.94) / widest);
         context.save();
@@ -935,7 +1141,6 @@ function textSign(spot: Board, sign: SignText): TslNode {
     const st = uv();
     const scroll = sign.marquee ? time.mul(sign.marquee.speed * repeats) : float(0);
     const lit = texture(map, vec2(st.x.mul(repeats).add(scroll), st.y)).rgb;
-    // Some signs blink off now and then, the way a cheap sign does.
     const blink = sign.blink ? float(1).sub(step(sign.blink, fract(time.mul(0.45))).mul(0.85)) : float(1);
     return lit.mul(2.2).mul(blink);
 }

@@ -13,12 +13,12 @@ const {
     dot,
     float,
     length,
-    log2,
     max,
     min,
     mix,
     normalize,
     normalWorld,
+    perspectiveDepthToViewZ,
     positionView,
     positionWorld,
     pow,
@@ -31,24 +31,21 @@ const {
     vec3,
 } = TSL;
 
-// The city through rained-on, fogged glass: frosted where it's misted, sharp and lensed through the drops, clear
-// down the trails the running drops wipe. The drops themselves are simulated in rain.ts.
-const FROST = { radius: 5, taps: 12, lift: vec3(0.025, 0.028, 0.035), tint: vec3(0.88, 0.94, 1) };
-// City lights brighter than this flicker as they cross pixels: capped before blurring.
-const MAX_LIGHT = 1.4;
-const CLEAR = { radius: 1.2, tint: vec3(0.9, 0.96, 1) };
-// Out-of-focus blur never wider than this, in city texels: the taps get too sparse past it.
+const FROST = { lift: vec3(0.025, 0.028, 0.035), tint: vec3(0.88, 0.94, 1) };
+const DEPTH_FROST = { near: 0.35, from: 3, to: 80 };
+const MIST = { close: 0.3, across: 0.65, dropsGone: 0.6, liftMore: 1.6, near: 1.5, far: 6 };
+// City light past white is capped before blurring: blurred, it spreads into halos that read as bloom.
+const MAX_LIGHT = 1;
+const CLEAR = { tint: vec3(0.9, 0.96, 1) };
 const MAX_DEFOCUS = 24;
-// How far a drop's lens bends the view, in screen space, and which way: drops flip what's behind them.
+// A drop's lens flips what's behind it.
 const LENS = 0.05;
-// Light catching the top of each drop, from the room's lamps.
 const GLINT = { from: vec3(-0.35, 0.5, 0.8), sharpness: 24, strength: 0.6, colour: vec3(1, 0.9, 0.8) };
 const SHEEN = { colour: vec3(0.5, 0.6, 0.7), amount: 0.18 };
 
 export type Glass = {
     sheet: THREE.Mesh;
     rain: Rain;
-    // The splats' depth of field, so the glass blurs with the room.
     focal: ReturnType<typeof uniform>;
     aperture: ReturnType<typeof uniform>;
     focalPixels: ReturnType<typeof uniform>;
@@ -63,7 +60,6 @@ export function initGlass(scene: THREE.Scene, city: City, renderer: WebGPURender
     const at = vec2(screenUV.x, webgpu ? screenUV.y : float(1).sub(screenUV.y));
     const toScreen = (v: TslNode) => vec2(v.x, webgpu ? v.y.negate() : v.y);
 
-    // Depth of field, as the splats do it: how wide the glass's blur circle is on screen.
     const focal = uniform(2);
     const aperture = uniform(0);
     const focalPixels = uniform(500);
@@ -73,41 +69,39 @@ export function initGlass(scene: THREE.Scene, city: City, renderer: WebGPURender
         MAX_DEFOCUS,
     ).toVar();
 
-    // The water map: slope across and up in red and green, thickness in blue, coverage in alpha.
     const water = texture(rain.water.texture, uv()).toVar();
     const cover = water.a;
     const slope = water.rg.sub(0.5).mul(2).toVar();
     const wiped = texture(rain.wiped.texture, uv()).a;
     const clear = max(cover, wiped.mul(0.85)).toVar();
 
-    // Blurred by reading a softer mip level, with four taps a little apart so its texels don't show as blocks.
-    const blurred = (where: TslNode, radius: TslNode) => {
-        const level = log2(radius.max(1)).toVar();
-        const spread = city.texel.mul(radius.mul(0.5));
-        let sum: TslNode = vec3(0);
-        for (const [x, y] of [
-            [0.5, 0.2],
-            [-0.2, 0.5],
-            [-0.5, -0.2],
-            [0.2, -0.5],
-        ]) {
-            sum = sum.add(min(texture(city.target.texture, where.add(spread.mul(vec2(x, y)))).level(level).rgb, vec3(MAX_LIGHT)));
-        }
-        return sum.div(4);
-    };
-    const frosted = blurred(at, defocusTexels.add(FROST.radius)).mul(FROST.tint).add(FROST.lift);
+    const plain = (where: TslNode) => min(texture(city.target.texture, where).rgb, vec3(MAX_LIGHT));
+    const frostedBy = (where: TslNode, amount: TslNode) =>
+        mix(
+            mix(plain(where), texture(city.frost.light.texture, where).rgb, smoothstep(0, 0.5, amount)),
+            texture(city.frost.heavy.texture, where).rgb,
+            smoothstep(0.5, 1, amount),
+        );
+    const focusBlur = defocusTexels.div(MAX_DEFOCUS);
 
-    // Through water: bent the other way, as a lens flips what's behind it, and only a little soft.
+    const behindDepth = texture(city.target.depthTexture as THREE.DepthTexture, at).r;
+    const behind = perspectiveDepthToViewZ(behindDepth, city.camera.near, city.camera.far).negate().sub(depth).max(0);
+    const deep = mix(float(DEPTH_FROST.near), float(1), smoothstep(DEPTH_FROST.from, DEPTH_FROST.to, behind));
+    const away = smoothstep(MIST.near, MIST.far, cameraPosition.sub(positionWorld).length());
+    const amount = max(deep.mul(mix(float(MIST.close), float(MIST.across), away)), focusBlur);
+    const lift = FROST.lift.mul(mix(float(1), float(MIST.liftMore), away));
+    const frosted = frostedBy(at, amount).mul(FROST.tint).add(lift);
+
     const lensed = at.add(toScreen(slope.mul(cover).mul(-LENS)));
-    const sharp = blurred(lensed, defocusTexels.add(CLEAR.radius)).mul(CLEAR.tint);
+    const sharp = frostedBy(lensed, focusBlur).mul(CLEAR.tint);
 
-    // A drop darkens toward its steep rim, and its top catches the room's light.
     const rim = smoothstep(0.55, 0.95, length(slope)).mul(cover);
     const surface = normalize(vec3(slope.mul(0.9), water.b.add(0.15)));
     const glint = pow(max(dot(surface, normalize(GLINT.from)), 0), GLINT.sharpness)
         .mul(cover)
         .mul(GLINT.strength);
-    const seen = mix(frosted, sharp.mul(float(1).sub(rim.mul(0.6))), clear).add(GLINT.colour.mul(glint));
+    const drops = float(1).sub(away.mul(MIST.dropsGone));
+    const seen = mix(frosted, sharp.mul(float(1).sub(rim.mul(0.6))), clear.mul(drops)).add(GLINT.colour.mul(glint).mul(drops));
 
     const facing = abs(dot(normalize(cameraPosition.sub(positionWorld)), normalWorld));
     const sheen = pow(float(1).sub(smoothstep(0, 1, facing)), 3).mul(SHEEN.amount);
@@ -131,7 +125,6 @@ export function initGlass(scene: THREE.Scene, city: City, renderer: WebGPURender
 const frustum = new THREE.Frustum();
 const viewProjection = new THREE.Matrix4();
 
-// Only worth drawing the city when the window's on screen.
 export function glassInView(glass: Glass, camera: THREE.Camera): boolean {
     camera.updateMatrixWorld();
     viewProjection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
@@ -153,12 +146,9 @@ export function updateGlass(
     glass.focalPixels.value = height / 2 / Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2);
 }
 
-// Solid boxes over the capture's ragged frame, from just behind the glass to FRAME.depth into the room: clean lines,
-// and the ragged splats behind their faces hidden by depth.
 function cleanFrame(flyby: Flyby): THREE.Group {
     const frame = new THREE.Group();
     const material = new MeshBasicNodeMaterial();
-    // The room-side faces never see the car: only its bounce off the room reaches them.
     const bounce = (flyby.light.colour as unknown as TslNode).mul(flyby.light.bounce as unknown as TslNode);
     material.colorNode = vec3(0.012, 0.007, 0.005).mul(vec3(1).add(bounce.mul(12)));
     const along = new THREE.Vector3(-OUT[2], 0, OUT[0]);
