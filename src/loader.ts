@@ -1,4 +1,4 @@
-import type { ProgressStage } from 'spark-radix';
+import type { ProgressStage } from '@sparkjsdev/radix';
 
 const STAGES: Partial<Record<ProgressStage, [number, number]>> = {
     downloading: [0, 0.75],

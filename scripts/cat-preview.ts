@@ -1,5 +1,5 @@
 // The billboard cat on its own, for looking at while working on it: /cat-preview.html?t=seconds poses it at a moment.
-import { createRenderer } from 'spark-radix';
+import { createRenderer } from '@sparkjsdev/radix';
 import { CAT_VIDEO, initCatVideo, poseCat } from '../src/cat';
 
 const scale = 2;

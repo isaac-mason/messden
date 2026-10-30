@@ -7,7 +7,7 @@ import {
     type SplatNode,
     TSL,
     type TslNode,
-} from 'spark-radix';
+} from '@sparkjsdev/radix';
 import type { Flyby } from './flyby';
 import { EDGE, MARGIN, OUT, PANES, SILL, WALL } from './window-panes';
 

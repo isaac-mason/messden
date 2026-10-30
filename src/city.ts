@@ -1,4 +1,4 @@
-import { TSL, type TslNode } from 'spark-radix';
+import { TSL, type TslNode } from '@sparkjsdev/radix';
 import * as THREE from 'three';
 import { MeshBasicNodeMaterial, RenderTarget, type WebGPURenderer } from 'three/webgpu';
 import catjamUrl from '../assets/ads/catjam.png?url';

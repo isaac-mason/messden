@@ -1,4 +1,4 @@
-import { TSL, type TslNode } from 'spark-radix';
+import { TSL, type TslNode } from '@sparkjsdev/radix';
 import * as THREE from 'three';
 import { MeshBasicNodeMaterial, type WebGPURenderer } from 'three/webgpu';
 import { CITY_SCALE, type City } from './city';

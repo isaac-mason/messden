@@ -1,4 +1,4 @@
-import { TSL } from 'spark-radix';
+import { TSL } from '@sparkjsdev/radix';
 import * as THREE from 'three';
 import { MeshStandardNodeMaterial, RenderTarget, type WebGPURenderer } from 'three/webgpu';
 
