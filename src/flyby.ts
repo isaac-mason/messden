@@ -4,14 +4,12 @@ import { MeshBasicNodeMaterial } from 'three/webgpu';
 import { fogged } from './city';
 import { glassSheet, OUT } from './window-panes';
 
-const { abs, float, mix, normalWorld, pow, uniform, vec3 } = TSL;
+const { abs, float, mix, normalWorld, pow, smoothstep, uniform, vec3 } = TSL;
 
-// Every few seconds a neon car streaks past close outside, its underglow lighting the room through the window.
 const FLYBY = {
     gap: [2, 5],
     first: 2,
     distance: [5, 10],
-    // Two lanes, as seen looking out: a high one heading left, a low one heading right (along the wall is to the right).
     lanes: [
         { height: 1.5, direction: -1 },
         { height: -0.6, direction: 1 },
@@ -19,11 +17,8 @@ const FLYBY = {
     laneJitter: 0.4,
     speed: [22, 34],
     reach: 70,
-    // Light at a splat is colour × brightness / distance², through the panes only.
     brightness: 130,
-    // A faint fill of the car's colour over the whole room, as its light spills off what it hits; strongest close by.
     bounce: 0.06,
-    // Each car wears two: one on its strips and light bar, the other underneath, lighting the room.
     neon: [
         [1, 0.08, 0.55],
         [0.05, 0.9, 1],
@@ -72,32 +67,84 @@ export function initFlyby(): Flyby {
         mesh.scale.set(...scale);
         car.add(mesh);
     };
-    // Facing +x: a long tapered body, shaded lighter on top with a rim of the city's glow; a tinted canopy; neon strips
-    // along its flanks; the underglow; headlights ahead, a taillight bar behind.
     const shade = normalWorld.y.mul(0.5).add(0.5);
     const body = mix(vec3(0.015, 0.015, 0.022), vec3(0.09, 0.09, 0.12), shade).add(
         vec3(0.3, 0.1, 0.3).mul(pow(float(1).sub(abs(normalWorld.y)), 4).mul(0.2)),
     );
-    const hull = new THREE.CapsuleGeometry(0.62, 3.4, 6, 12).rotateZ(Math.PI / 2);
-    add(hull, lit(body), [0, 0, 0], [1, 0.62, 1.25]);
-    add(
-        new THREE.SphereGeometry(0.7, 16, 10),
-        lit(vec3(0.05, 0.12, 0.16).add(vec3(0.2, 0.3, 0.35).mul(shade.mul(0.4)))),
-        [-0.2, 0.38, 0],
-        [1.6, 0.5, 0.85],
+    // Side profile, extruded, then pinched in plan: a narrow nose, a slightly narrower tail.
+    const profile = (points: [number, number][], depth: number, bevel: number) => {
+        const shape = new THREE.Shape(points.map(([x, y]) => new THREE.Vector2(x, y)));
+        const geometry = new THREE.ExtrudeGeometry(shape, {
+            depth,
+            bevelEnabled: true,
+            bevelThickness: bevel,
+            bevelSize: bevel,
+            bevelSegments: 4,
+            curveSegments: 8,
+        }).translate(0, 0, -depth / 2);
+        const position = geometry.getAttribute('position');
+        for (let i = 0; i < position.count; i++) {
+            const x = position.getX(i);
+            const pinch =
+                x > 0 ? 1 - 0.55 * THREE.MathUtils.smoothstep(x, 0.6, 2.5) : 1 - 0.2 * THREE.MathUtils.smoothstep(-x, 1.4, 2.5);
+            position.setZ(i, position.getZ(i) * pinch);
+        }
+        geometry.computeVertexNormals();
+        return geometry;
+    };
+    // A low wedge: sharp nose, long hood, fastback, a lip of a spoiler at the tail.
+    const shell = profile(
+        [
+            [2.45, -0.02],
+            [2.25, 0.16],
+            [0.9, 0.36],
+            [-0.9, 0.4],
+            [-1.95, 0.36],
+            [-2.4, 0.52],
+            [-2.5, 0.42],
+            [-2.35, 0.1],
+            [-2.15, -0.26],
+            [1.7, -0.3],
+            [2.3, -0.2],
+        ],
+        1.5,
+        0.2,
     );
-    const strip = new THREE.CapsuleGeometry(0.035, 3.6, 2, 6).rotateZ(Math.PI / 2);
-    add(strip, lit(bright(trim, 5) as unknown as TslNode), [0, 0.02, 0.79]);
-    add(strip, lit(bright(trim, 5) as unknown as TslNode), [0, 0.02, -0.79]);
+    const gloss = smoothstep(0.55, 0.9, normalWorld.y).mul(0.12);
+    add(shell, lit(body.add(gloss)), [0, 0, 0]);
+    const glass = vec3(0.04, 0.1, 0.14)
+        .add(vec3(0.25, 0.4, 0.5).mul(shade.mul(0.35)))
+        .add(vec3(0.6, 0.8, 1).mul(smoothstep(0.6, 0.95, normalWorld.y).mul(0.25)));
+    add(
+        profile(
+            [
+                [1.05, 0.34],
+                [0.3, 0.76],
+                [-0.7, 0.8],
+                [-1.5, 0.4],
+            ],
+            1.1,
+            0.1,
+        ),
+        lit(glass),
+        [0, 0, 0],
+    );
+    // Thruster pods under each flank, glowing out the back in the trim's colour.
+    const pod = new THREE.CapsuleGeometry(0.2, 1.5, 4, 10).rotateZ(Math.PI / 2);
+    const exhaust = new THREE.CircleGeometry(0.17, 16).rotateY(-Math.PI / 2);
+    for (const side of [-1, 1]) {
+        add(pod, lit(body), [-0.9, -0.32, side * 0.72]);
+        add(exhaust, lit(bright(trim, 1.8) as unknown as TslNode), [-1.86, -0.32, side * 0.72]);
+        add(new THREE.BoxGeometry(2.6, 0.035, 0.02), lit(bright(trim, 1.6) as unknown as TslNode), [-0.5, -0.12, side * 0.97]);
+    }
     add(
         new THREE.CircleGeometry(1, 24).rotateX(Math.PI / 2),
-        lit(bright(glow, 4) as unknown as TslNode),
-        [0, -0.42, 0],
-        [2.2, 1, 0.75],
+        lit(bright(glow, 1.3) as unknown as TslNode),
+        [0, -0.45, 0],
+        [2.1, 1, 0.75],
     );
-    add(new THREE.SphereGeometry(0.13, 8, 6), lit(vec3(6, 5.6, 5)), [2.25, 0.02, 0.45]);
-    add(new THREE.SphereGeometry(0.13, 8, 6), lit(vec3(6, 5.6, 5)), [2.25, 0.02, -0.45]);
-    add(new THREE.CapsuleGeometry(0.06, 1.1, 2, 6).rotateX(Math.PI / 2), lit(vec3(4, 0.3, 0.2)), [-2.3, 0.08, 0]);
+    add(new THREE.BoxGeometry(0.04, 0.05, 1.3), lit(vec3(2.2, 2.1, 1.9)), [2.42, 0.05, 0]);
+    add(new THREE.BoxGeometry(0.04, 0.05, 1.6), lit(vec3(1.8, 0.15, 0.1)), [-2.47, 0.3, 0]);
     car.visible = false;
 
     return {
